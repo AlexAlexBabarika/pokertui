@@ -3,7 +3,12 @@ pub struct PlayerId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    Preflop, Flop, Turn, River, Showdown, Complete,
+    Preflop,
+    Flop,
+    Turn,
+    River,
+    Showdown,
+    Complete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

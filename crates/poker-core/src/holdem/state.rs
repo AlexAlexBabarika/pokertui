@@ -1,7 +1,7 @@
+use super::pots::Pot;
+use super::types::{HandConfig, Phase, PlayerId};
 use crate::Card;
 use crate::Deck;
-use super::types::{HandConfig, Phase, PlayerId};
-use super::pots::Pot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
@@ -51,10 +51,20 @@ impl HandState {
             (2..=9).contains(&config.num_players),
             "num_players must be in 2..=9"
         );
-        assert_eq!(stacks.len(), config.num_players, "stacks must match num_players");
+        assert_eq!(
+            stacks.len(),
+            config.num_players,
+            "stacks must match num_players"
+        );
         assert!(config.big_blind > 0, "big blind must be positive");
-        assert!(config.small_blind > 0 && config.small_blind < config.big_blind, "SB in (0, BB)");
-        assert!(config.dealer.0 < config.num_players, "dealer index in range");
+        assert!(
+            config.small_blind > 0 && config.small_blind < config.big_blind,
+            "SB in (0, BB)"
+        );
+        assert!(
+            config.dealer.0 < config.num_players,
+            "dealer index in range"
+        );
 
         let n = config.num_players;
         let mut deck = Deck::new();
@@ -64,7 +74,10 @@ impl HandState {
         // Deal 2 hole cards per player, alternating (real poker dealing order).
         let mut hole: Vec<[Card; 2]> = Vec::with_capacity(n);
         for _ in 0..n {
-            hole.push([deck.remove(0), Card::new(crate::Rank::Two, crate::Suit::Clubs)]);
+            hole.push([
+                deck.remove(0),
+                Card::new(crate::Rank::Two, crate::Suit::Clubs),
+            ]);
         }
         for p in 0..n {
             hole[p][1] = deck.remove(0);
@@ -93,10 +106,15 @@ impl HandState {
         stacks[sb_idx] -= sb_amount;
         contributed[sb_idx] += sb_amount;
         round_bet[sb_idx] += sb_amount;
-        if stacks[sb_idx] == 0 { all_in[sb_idx] = true; }
+        if stacks[sb_idx] == 0 {
+            all_in[sb_idx] = true;
+        }
         log.push(LogEntry {
             actor: Some(PlayerId(sb_idx)),
-            kind: LogKind::PostBlind { amount: sb_amount, is_big: false },
+            kind: LogKind::PostBlind {
+                amount: sb_amount,
+                is_big: false,
+            },
         });
 
         // Post big blind (capped at stack).
@@ -104,10 +122,15 @@ impl HandState {
         stacks[bb_idx] -= bb_amount;
         contributed[bb_idx] += bb_amount;
         round_bet[bb_idx] += bb_amount;
-        if stacks[bb_idx] == 0 { all_in[bb_idx] = true; }
+        if stacks[bb_idx] == 0 {
+            all_in[bb_idx] = true;
+        }
         log.push(LogEntry {
             actor: Some(PlayerId(bb_idx)),
-            kind: LogKind::PostBlind { amount: bb_amount, is_big: true },
+            kind: LogKind::PostBlind {
+                amount: bb_amount,
+                is_big: true,
+            },
         });
 
         let acted_this_round = vec![false; n];
@@ -174,7 +197,11 @@ mod tests {
         let s = HandState::new_hand(cfg(2), vec![10_000; 2]);
         assert_eq!(s.stacks[0], 9_950, "dealer/SB posts 50 in HU");
         assert_eq!(s.stacks[1], 9_900, "BB posts 100");
-        assert_eq!(s.to_act, Some(PlayerId(0)), "dealer/SB acts first preflop in HU");
+        assert_eq!(
+            s.to_act,
+            Some(PlayerId(0)),
+            "dealer/SB acts first preflop in HU"
+        );
     }
 
     #[test]

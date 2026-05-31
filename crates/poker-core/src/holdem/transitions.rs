@@ -4,7 +4,9 @@ use super::types::{Action, ApplyError, Phase, PlayerId};
 /// Return every legal action for the player in `state.to_act`.
 /// Returns empty if no one is to act (hand complete or between rounds).
 pub fn legal_actions(state: &HandState) -> Vec<Action> {
-    let Some(actor) = state.to_act else { return Vec::new(); };
+    let Some(actor) = state.to_act else {
+        return Vec::new();
+    };
     let i = actor.0;
     if state.folded[i] || state.all_in[i] {
         return Vec::new();
@@ -48,9 +50,13 @@ pub fn legal_actions(state: &HandState) -> Vec<Action> {
 /// Bet/Raise variants here take *any* `to` between the min and max,
 /// not just the minimum the `legal_actions` summary returns.
 fn is_legal(state: &HandState, action: Action) -> bool {
-    let Some(actor) = state.to_act else { return false; };
+    let Some(actor) = state.to_act else {
+        return false;
+    };
     let i = actor.0;
-    if state.folded[i] || state.all_in[i] { return false; }
+    if state.folded[i] || state.all_in[i] {
+        return false;
+    }
     match action {
         Action::Fold => true,
         Action::Check => state.round_bet[i] == state.current_bet,
@@ -71,10 +77,7 @@ fn is_legal(state: &HandState, action: Action) -> bool {
 
 /// Apply one action by the current actor. Returns the new state on success,
 /// or `(state_unchanged, error)` on failure.
-pub fn apply(
-    mut state: HandState,
-    action: Action,
-) -> Result<HandState, (HandState, ApplyError)> {
+pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandState, ApplyError)> {
     let Some(actor) = state.to_act else {
         return Err((state, ApplyError::HandComplete));
     };
@@ -123,7 +126,9 @@ pub fn apply(
             state.current_bet = to;
             state.min_raise = to;
             state.last_aggressor = Some(actor);
-            if state.stacks[i] == 0 { state.all_in[i] = true; }
+            if state.stacks[i] == 0 {
+                state.all_in[i] = true;
+            }
             state.acted_this_round[i] = true;
             state.log.push(super::state::LogEntry {
                 actor: Some(actor),
@@ -140,7 +145,9 @@ pub fn apply(
             state.current_bet = to;
             state.min_raise = raise_size;
             state.last_aggressor = Some(actor);
-            if state.stacks[i] == 0 { state.all_in[i] = true; }
+            if state.stacks[i] == 0 {
+                state.all_in[i] = true;
+            }
             state.acted_this_round[i] = true;
             state.log.push(super::state::LogEntry {
                 actor: Some(actor),
@@ -179,16 +186,22 @@ pub fn apply(
 }
 
 fn advance_actor(state: &mut HandState) {
-    if try_terminate_by_folds(state) { return; }
+    if try_terminate_by_folds(state) {
+        return;
+    }
     if round_is_closed(state) {
         close_round_and_advance(state);
         return;
     }
     let n = state.config.num_players;
-    let Some(PlayerId(curr)) = state.to_act else { return; };
+    let Some(PlayerId(curr)) = state.to_act else {
+        return;
+    };
     for step in 1..=n {
         let cand = (curr + step) % n;
-        if state.folded[cand] || state.all_in[cand] { continue; }
+        if state.folded[cand] || state.all_in[cand] {
+            continue;
+        }
         state.to_act = Some(PlayerId(cand));
         return;
     }
@@ -211,7 +224,10 @@ fn try_terminate_by_folds(state: &mut HandState) -> bool {
         state.winners.push(vec![PlayerId(winner)]);
         state.log.push(super::state::LogEntry {
             actor: Some(PlayerId(winner)),
-            kind: super::state::LogKind::WinPot { pot_idx: 0, amount: total },
+            kind: super::state::LogKind::WinPot {
+                pot_idx: 0,
+                amount: total,
+            },
         });
         state.phase = Phase::Complete;
         state.to_act = None;
@@ -225,9 +241,15 @@ fn round_is_closed(state: &HandState) -> bool {
     let actionable: Vec<usize> = (0..n)
         .filter(|&i| !state.folded[i] && !state.all_in[i])
         .collect();
-    if actionable.is_empty() { return true; }
-    let all_matched = actionable.iter().all(|&i| state.round_bet[i] == state.current_bet);
-    if !all_matched { return false; }
+    if actionable.is_empty() {
+        return true;
+    }
+    let all_matched = actionable
+        .iter()
+        .all(|&i| state.round_bet[i] == state.current_bet);
+    if !all_matched {
+        return false;
+    }
     state.all_have_acted_this_round(&actionable)
 }
 
@@ -257,7 +279,11 @@ fn close_round_and_advance(state: &mut HandState) {
 
     match next {
         Phase::Flop => {
-            let c = [state.deck.remove(0), state.deck.remove(0), state.deck.remove(0)];
+            let c = [
+                state.deck.remove(0),
+                state.deck.remove(0),
+                state.deck.remove(0),
+            ];
             state.board.extend_from_slice(&c);
             state.log.push(super::state::LogEntry {
                 actor: None,
@@ -333,10 +359,15 @@ mod tests {
         let actions = legal_actions(&s);
         assert!(actions.contains(&Action::Fold));
         assert!(actions.contains(&Action::Call));
-        assert!(actions.contains(&Action::Raise { to: 200 }), "min-raise to 200");
+        assert!(
+            actions.contains(&Action::Raise { to: 200 }),
+            "min-raise to 200"
+        );
         assert!(actions.contains(&Action::AllIn));
-        assert!(!actions.iter().any(|a| matches!(a, Action::Check)),
-            "cannot check facing the BB");
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Check)),
+            "cannot check facing the BB"
+        );
     }
 
     #[test]
@@ -347,8 +378,10 @@ mod tests {
         let actions = legal_actions(&s);
         assert!(actions.contains(&Action::Call));
         assert!(actions.contains(&Action::AllIn));
-        assert!(!actions.iter().any(|a| matches!(a, Action::Raise { .. })),
-            "stack too small for min-raise; only AllIn covers the raise");
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Raise { .. })),
+            "stack too small for min-raise; only AllIn covers the raise"
+        );
     }
 
     #[test]
@@ -464,13 +497,20 @@ mod tests {
     fn all_remaining_all_in_jumps_to_showdown() {
         // Two players, both shove preflop.
         let cfg = HandConfig {
-            num_players: 2, small_blind: 50, big_blind: 100,
-            dealer: PlayerId(0), seed: 7,
+            num_players: 2,
+            small_blind: 50,
+            big_blind: 100,
+            dealer: PlayerId(0),
+            seed: 7,
         };
         let s = HandState::new_hand(cfg, vec![1_000, 1_000]);
-        let s = apply(s, Action::AllIn).unwrap();   // SB shoves
-        let s = apply(s, Action::Call).unwrap();    // BB calls (also all-in)
+        let s = apply(s, Action::AllIn).unwrap(); // SB shoves
+        let s = apply(s, Action::Call).unwrap(); // BB calls (also all-in)
         assert_eq!(s.phase, Phase::Complete);
-        assert_eq!(s.board.len(), 5, "all 5 community cards dealt before showdown");
+        assert_eq!(
+            s.board.len(),
+            5,
+            "all 5 community cards dealt before showdown"
+        );
     }
 }

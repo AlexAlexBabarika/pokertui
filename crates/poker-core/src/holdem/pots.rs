@@ -1,6 +1,6 @@
-use super::types::PlayerId;
 use super::state::HandState;
-use crate::{evaluate, Card, HandStrength};
+use super::types::PlayerId;
+use crate::{Card, HandStrength, evaluate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pot {
@@ -82,7 +82,10 @@ pub fn settle(state: &mut HandState) -> Vec<(Pot, Vec<PlayerId>, u64)> {
             state.stacks[idx] += share;
             state.log.push(super::state::LogEntry {
                 actor: Some(PlayerId(idx)),
-                kind: super::state::LogKind::WinPot { pot_idx, amount: share },
+                kind: super::state::LogKind::WinPot {
+                    pot_idx,
+                    amount: share,
+                },
             });
         }
         // Odd chips: distribute one at a time, starting left of the dealer.
@@ -152,7 +155,10 @@ mod tests {
         let pots = build_pots(&[100, 100, 100], &[false, false, false]);
         assert_eq!(pots.len(), 1);
         assert_eq!(pots[0].amount, 300);
-        assert_eq!(pots[0].eligible, vec![PlayerId(0), PlayerId(1), PlayerId(2)]);
+        assert_eq!(
+            pots[0].eligible,
+            vec![PlayerId(0), PlayerId(1), PlayerId(2)]
+        );
     }
 
     #[test]
@@ -163,7 +169,10 @@ mod tests {
 
         // Main pot: 50 * 3 = 150, all three eligible
         assert_eq!(pots[0].amount, 150);
-        assert_eq!(pots[0].eligible, vec![PlayerId(0), PlayerId(1), PlayerId(2)]);
+        assert_eq!(
+            pots[0].eligible,
+            vec![PlayerId(0), PlayerId(1), PlayerId(2)]
+        );
 
         // Side pot: (200-50)*2 = 300, only P1 and P2 eligible
         assert_eq!(pots[1].amount, 300);
@@ -231,11 +240,29 @@ mod tests {
         let pots = build_pots(&[100, 250, 600], &[false, false, false]);
         assert_eq!(pots.len(), 3);
         // Level 100: 100*3 = 300, eligible {0,1,2}
-        assert_eq!(pots[0], Pot { amount: 300, eligible: vec![PlayerId(0), PlayerId(1), PlayerId(2)] });
+        assert_eq!(
+            pots[0],
+            Pot {
+                amount: 300,
+                eligible: vec![PlayerId(0), PlayerId(1), PlayerId(2)]
+            }
+        );
         // Level 250: (250-100)*2 = 300 (only P1 and P2 contribute beyond 100)
-        assert_eq!(pots[1], Pot { amount: 300, eligible: vec![PlayerId(1), PlayerId(2)] });
+        assert_eq!(
+            pots[1],
+            Pot {
+                amount: 300,
+                eligible: vec![PlayerId(1), PlayerId(2)]
+            }
+        );
         // Level 600: (600-250)*1 = 350 (only P2)
-        assert_eq!(pots[2], Pot { amount: 350, eligible: vec![PlayerId(2)] });
+        assert_eq!(
+            pots[2],
+            Pot {
+                amount: 350,
+                eligible: vec![PlayerId(2)]
+            }
+        );
     }
 
     use crate::holdem::state::HandState;
