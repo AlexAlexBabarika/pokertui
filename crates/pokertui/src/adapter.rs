@@ -32,15 +32,20 @@ fn position_label(offset: usize, n: usize) -> String {
             "BB".into()
         };
     }
-    match (offset, n) {
-        (0, _) => "BTN".into(),
-        (1, _) => "SB".into(),
-        (2, _) => "BB".into(),
-        (3, _) => "UTG".into(),
-        (4, n) if n >= 6 => "MP".into(),
-        (5, n) if n >= 6 => "CO".into(),
-        // Catch-all for short tables
-        _ => format!("P{}", offset),
+    // The cutoff is always the seat immediately to the right of the button,
+    // i.e. the highest offset. Resolve it first so 5-handed (offset 4) labels
+    // CO rather than falling through to the generic catch-all.
+    if n >= 5 && offset == n - 1 {
+        return "CO".into();
+    }
+    match offset {
+        0 => "BTN".into(),
+        1 => "SB".into(),
+        2 => "BB".into(),
+        3 => "UTG".into(),
+        4 => "MP".into(), // only reached for n >= 6; n == 5 hits CO above
+        // Catch-all for the middle seats of larger tables.
+        _ => format!("P{offset}"),
     }
 }
 
@@ -226,6 +231,19 @@ mod tests {
         assert_eq!(engine.phase, EnginePhase::Complete);
         let view = to_presentation(&engine, &NameRegistry::demo_six());
         assert_eq!(view.phase.pot, 0, "pot is empty once it has been paid out");
+    }
+
+    #[test]
+    fn position_labels_cover_five_and_six_handed() {
+        // 5-handed: cutoff is the last seat (offset 4), not a generic "P4".
+        assert_eq!(position_label(0, 5), "BTN");
+        assert_eq!(position_label(1, 5), "SB");
+        assert_eq!(position_label(2, 5), "BB");
+        assert_eq!(position_label(3, 5), "UTG");
+        assert_eq!(position_label(4, 5), "CO");
+        // 6-handed: offset 4 is MP, offset 5 (the last seat) is CO.
+        assert_eq!(position_label(4, 6), "MP");
+        assert_eq!(position_label(5, 6), "CO");
     }
 
     #[test]
