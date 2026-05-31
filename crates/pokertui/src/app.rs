@@ -5,7 +5,10 @@ use crate::adapter::{NameRegistry, to_presentation};
 use crate::state::GameState;
 
 pub struct App {
-    pub engine: HandState,
+    // `Option` so a turn can move the engine out (apply consumes it by value)
+    // and move the result back without a placeholder. It is always `Some`
+    // outside of `handle_key`; access it through `engine()`.
+    engine: Option<HandState>,
     pub names: NameRegistry,
 }
 
@@ -20,16 +23,25 @@ impl App {
         };
         let engine = HandState::new_hand(cfg, vec![10_000; 6]);
         let names = NameRegistry::demo_six();
-        Self { engine, names }
+        Self {
+            engine: Some(engine),
+            names,
+        }
+    }
+
+    /// The current engine state. Always present between turns.
+    pub fn engine(&self) -> &HandState {
+        self.engine.as_ref().expect("engine present between turns")
     }
 
     pub fn view(&self) -> GameState {
-        to_presentation(&self.engine, &self.names)
+        to_presentation(self.engine(), &self.names)
     }
 
     /// Returns true if the key was consumed (engine state may have changed).
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
-        let Some(actor) = self.engine.to_act else {
+        let engine = self.engine();
+        let Some(actor) = engine.to_act else {
             return false;
         };
         // Only the hero (the human at the keyboard for pass-and-play) acts via keys.
@@ -40,7 +52,7 @@ impl App {
         let action = match key {
             KeyCode::Char('f') | KeyCode::Char('F') => Some(Action::Fold),
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                if legal_actions(&self.engine).contains(&Action::Check) {
+                if legal_actions(engine).contains(&Action::Check) {
                     Some(Action::Check)
                 } else {
                     Some(Action::Call)
@@ -48,13 +60,13 @@ impl App {
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 // Minimum legal raise / bet.
-                if self.engine.current_bet == 0 {
+                if engine.current_bet == 0 {
                     Some(Action::Bet {
-                        to: self.engine.config.big_blind,
+                        to: engine.config.big_blind,
                     })
                 } else {
                     Some(Action::Raise {
-                        to: self.engine.current_bet + self.engine.min_raise,
+                        to: engine.current_bet + engine.min_raise,
                     })
                 }
             }
@@ -65,34 +77,20 @@ impl App {
         let Some(action) = action else {
             return false;
         };
-        // Replace engine state in place, ignoring illegal moves.
-        let taken = std::mem::replace(&mut self.engine, dummy_engine());
+        // Move the engine out, apply, and move the result (or the unchanged
+        // state on an illegal move) back. No allocation, no placeholder.
+        let taken = self.engine.take().expect("engine present between turns");
         match apply(taken, action) {
             Ok(next) => {
-                self.engine = next;
+                self.engine = Some(next);
                 true
             }
             Err((restored, _)) => {
-                self.engine = restored;
+                self.engine = Some(restored);
                 false
             }
         }
     }
-}
-
-fn dummy_engine() -> HandState {
-    // Placeholder used only between `replace` and `match` above. Never observed
-    // because the match arms re-assign immediately.
-    HandState::new_hand(
-        HandConfig {
-            num_players: 2,
-            small_blind: 1,
-            big_blind: 2,
-            dealer: PlayerId(0),
-            seed: 0,
-        },
-        vec![10, 10],
-    )
 }
 
 #[cfg(test)]
@@ -102,23 +100,23 @@ mod tests {
     #[test]
     fn pressing_f_folds_current_actor() {
         let mut app = App::new_demo_hand();
-        let actor_before = app.engine.to_act.unwrap();
+        let actor_before = app.engine().to_act.unwrap();
         app.handle_key(KeyCode::Char('f'));
-        assert!(app.engine.folded[actor_before.0]);
+        assert!(app.engine().folded[actor_before.0]);
     }
 
     #[test]
     fn pressing_c_calls_when_facing_bet() {
         let mut app = App::new_demo_hand();
-        let actor = app.engine.to_act.unwrap();
+        let actor = app.engine().to_act.unwrap();
         app.handle_key(KeyCode::Char('c'));
-        assert_eq!(app.engine.round_bet[actor.0], 100);
+        assert_eq!(app.engine().round_bet[actor.0], 100);
     }
 
     #[test]
     fn pressing_r_raises_to_min() {
         let mut app = App::new_demo_hand();
         app.handle_key(KeyCode::Char('r'));
-        assert_eq!(app.engine.current_bet, 200);
+        assert_eq!(app.engine().current_bet, 200);
     }
 }
