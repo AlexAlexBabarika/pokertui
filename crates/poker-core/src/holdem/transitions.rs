@@ -281,10 +281,11 @@ fn close_round_and_advance(state: &mut HandState) {
             });
         }
         Phase::Showdown => {
-            // Task 9 settles pots here. For now, mark the hand complete so
-            // tests see Phase::Complete (we don't have settlement yet).
-            state.phase = Phase::Complete;
-            state.to_act = None;
+            state.log.push(super::state::LogEntry {
+                actor: None,
+                kind: super::state::LogKind::Showdown,
+            });
+            super::pots::settle(state);
             return;
         }
         _ => {}
