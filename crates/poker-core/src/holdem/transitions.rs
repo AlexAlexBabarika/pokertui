@@ -72,9 +72,23 @@ pub fn apply(
                 kind: super::state::LogKind::Action(Action::Check),
             });
         }
-        Action::Call | Action::Bet { .. } | Action::Raise { .. } | Action::AllIn => {
+        Action::Call => {
+            let to_call = state.current_bet - state.round_bet[i];
+            let pay = to_call.min(state.stacks[i]);
+            state.stacks[i] -= pay;
+            state.contributed[i] += pay;
+            state.round_bet[i] += pay;
+            if state.stacks[i] == 0 {
+                state.all_in[i] = true;
+            }
+            state.log.push(super::state::LogEntry {
+                actor: Some(actor),
+                kind: super::state::LogKind::Action(Action::Call),
+            });
+        }
+        Action::Bet { .. } | Action::Raise { .. } | Action::AllIn => {
             // implemented in later tasks
-            return Err((state, ApplyError::IllegalAction("call/bet/raise/all-in not yet wired")));
+            return Err((state, ApplyError::IllegalAction("bet/raise/all-in not yet wired")));
         }
     }
 
@@ -166,5 +180,26 @@ mod tests {
         let s = HandState::new_hand(cfg6(), vec![10_000; 6]);
         let result = apply(s, Action::Check);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn call_moves_chips_from_stack_to_round_bet() {
+        let s = HandState::new_hand(cfg6(), vec![10_000; 6]);
+        let after = apply(s, Action::Call).expect("call legal");
+        assert_eq!(after.stacks[3], 9_900, "UTG paid 100");
+        assert_eq!(after.round_bet[3], 100);
+        assert_eq!(after.contributed[3], 100);
+        assert!(!after.all_in[3]);
+    }
+
+    #[test]
+    fn call_with_short_stack_goes_all_in() {
+        let mut stacks = vec![10_000u64; 6];
+        stacks[3] = 70; // UTG can only put in 70 of the 100 call
+        let s = HandState::new_hand(cfg6(), stacks);
+        let after = apply(s, Action::Call).expect("call legal");
+        assert_eq!(after.stacks[3], 0);
+        assert_eq!(after.round_bet[3], 70);
+        assert!(after.all_in[3], "all-in on short call");
     }
 }
