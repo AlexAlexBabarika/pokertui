@@ -32,9 +32,11 @@ pub fn legal_actions(state: &HandState) -> Vec<Action> {
             out.push(Action::Bet { to: min_to });
         }
     } else {
-        // Raise: minimum total is current_bet + min_raise.
+        // Raise: minimum total is current_bet + min_raise. Only offered when the
+        // action is still open to this player — a sub-minimum all-in does not
+        // reopen betting for someone who has already acted this round.
         let min_to = state.current_bet + state.min_raise;
-        if max_to >= min_to {
+        if !state.acted_this_round[i] && max_to >= min_to {
             out.push(Action::Raise { to: min_to });
         }
     }
@@ -67,7 +69,11 @@ fn is_legal(state: &HandState, action: Action) -> bool {
                 && to <= state.round_bet[i] + state.stacks[i]
         }
         Action::Raise { to } => {
+            // `!acted_this_round[i]` enforces the reopening rule: a player who
+            // already acted may only re-raise if a full-size raise has since
+            // reopened the action (which clears their `acted_this_round` flag).
             state.current_bet > 0
+                && !state.acted_this_round[i]
                 && to >= state.current_bet + state.min_raise
                 && to <= state.round_bet[i] + state.stacks[i]
         }
@@ -134,6 +140,7 @@ pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandSta
             if state.stacks[i] == 0 {
                 state.all_in[i] = true;
             }
+            reopen_action(&mut state);
             state.acted_this_round[i] = true;
             state.log.push(super::state::LogEntry {
                 actor: Some(actor),
@@ -153,6 +160,7 @@ pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandSta
             if state.stacks[i] == 0 {
                 state.all_in[i] = true;
             }
+            reopen_action(&mut state);
             state.acted_this_round[i] = true;
             state.log.push(super::state::LogEntry {
                 actor: Some(actor),
@@ -173,6 +181,7 @@ pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandSta
                 if raise_size >= state.min_raise {
                     state.min_raise = raise_size;
                     state.last_aggressor = Some(actor);
+                    reopen_action(&mut state);
                 }
                 // Otherwise: under-shove. current_bet rises but last_aggressor
                 // and min_raise are unchanged → players who already acted at the
@@ -188,6 +197,14 @@ pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandSta
 
     advance_actor(&mut state);
     Ok(state)
+}
+
+/// A full-size bet or raise reopens the action: every other player owes a fresh
+/// decision and may raise again. (A sub-minimum all-in deliberately does NOT
+/// call this, so players who already acted are left with only call/fold.) The
+/// actor re-marks their own `acted_this_round` immediately after.
+fn reopen_action(state: &mut HandState) {
+    state.acted_this_round.iter_mut().for_each(|a| *a = false);
 }
 
 fn advance_actor(state: &mut HandState) {
@@ -465,6 +482,58 @@ mod tests {
         assert_eq!(after.current_bet, 300);
         assert_eq!(after.min_raise, 200);
         assert_eq!(after.last_aggressor, Some(PlayerId(3)));
+    }
+
+    #[test]
+    fn under_shove_all_in_does_not_let_acted_player_reraise() {
+        // UTG(3) raises to 300; MP(4) calls. CO(5) is short and shoves to 400 —
+        // a raise of only 100, below the min-raise of 200, so it does NOT reopen
+        // betting. When action returns to UTG (who already acted), UTG may only
+        // call or fold, never re-raise.
+        let mut stacks = vec![10_000u64; 6];
+        stacks[5] = 400; // CO can only shove to 400 (under-raise over 300)
+        let s = HandState::new_hand(cfg6(), stacks);
+        let s = apply(s, Action::Raise { to: 300 }).unwrap(); // UTG
+        let s = apply(s, Action::Call).unwrap(); // MP
+        let s = apply(s, Action::AllIn).unwrap(); // CO under-shove to 400
+        assert_eq!(s.current_bet, 400);
+        assert_eq!(s.min_raise, 200, "under-shove leaves min_raise untouched");
+        let s = apply(s, Action::Fold).unwrap(); // BTN
+        let s = apply(s, Action::Fold).unwrap(); // SB
+        let s = apply(s, Action::Fold).unwrap(); // BB
+        assert_eq!(s.to_act, Some(PlayerId(3)), "action returns to UTG");
+
+        let actions = legal_actions(&s);
+        assert!(actions.contains(&Action::Call));
+        assert!(actions.contains(&Action::Fold));
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Raise { .. })),
+            "an under-shove must not reopen the raise for an already-acted player"
+        );
+        assert!(
+            apply(s, Action::Raise { to: 600 }).is_err(),
+            "the re-raise is rejected by apply, not just hidden from legal_actions"
+        );
+    }
+
+    #[test]
+    fn full_reraise_reopens_action_for_already_acted_player() {
+        // UTG(3) raises to 300; MP(4) calls; CO(5) makes a full re-raise to 600.
+        // That reopens the action, so when it returns to UTG — who had already
+        // acted — UTG may raise again.
+        let s = HandState::new_hand(cfg6(), vec![10_000; 6]);
+        let s = apply(s, Action::Raise { to: 300 }).unwrap(); // UTG
+        let s = apply(s, Action::Call).unwrap(); // MP
+        let s = apply(s, Action::Raise { to: 600 }).unwrap(); // CO full re-raise
+        let s = apply(s, Action::Fold).unwrap(); // BTN
+        let s = apply(s, Action::Fold).unwrap(); // SB
+        let s = apply(s, Action::Fold).unwrap(); // BB
+        assert_eq!(s.to_act, Some(PlayerId(3)), "action returns to UTG");
+        let actions = legal_actions(&s);
+        assert!(
+            actions.iter().any(|a| matches!(a, Action::Raise { .. })),
+            "a full re-raise reopens the action for a player who already acted"
+        );
     }
 
     #[test]
