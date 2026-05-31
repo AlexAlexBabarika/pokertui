@@ -1,5 +1,7 @@
 //! Pure poker rules kernel — no UI, no async, no I/O.
 
+pub mod holdem;
+
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
