@@ -90,7 +90,14 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         label: phase_label(engine.phase),
         board: engine.board.clone(),
         dealt: engine.board.len(),
-        pot: engine.contributed.iter().sum(),
+        // Once the hand is complete the pot has been paid into the winners'
+        // stacks, so the live pot is empty. `contributed` is never reset, so
+        // showing its sum at `Complete` would display the already-awarded pot.
+        pot: if engine.phase == EnginePhase::Complete {
+            0
+        } else {
+            engine.contributed.iter().sum()
+        },
         to_call: to_call_for_hero(engine, names.hero),
         equity: 0,
         odds_pct: 0.0,
@@ -195,5 +202,25 @@ mod tests {
         assert_eq!(view.players[3].pos, "UTG");
         assert_eq!(view.phase.label, "PREFLOP");
         assert_eq!(view.phase.pot, 150, "SB + BB in pot");
+    }
+
+    #[test]
+    fn completed_hand_shows_empty_pot() {
+        use poker_core::holdem::{Action, apply};
+        let cfg = HandConfig {
+            num_players: 6,
+            small_blind: 50,
+            big_blind: 100,
+            dealer: PlayerId(0),
+            seed: 1,
+        };
+        let mut engine = HandState::new_hand(cfg, vec![10_000; 6]);
+        // Everyone folds to the BB → hand completes, pot is awarded.
+        for _ in 0..5 {
+            engine = apply(engine, Action::Fold).unwrap();
+        }
+        assert_eq!(engine.phase, EnginePhase::Complete);
+        let view = to_presentation(&engine, &NameRegistry::demo_six());
+        assert_eq!(view.phase.pot, 0, "pot is empty once it has been paid out");
     }
 }
