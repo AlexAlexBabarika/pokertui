@@ -1,4 +1,4 @@
-use poker_core::{Card, Rank, Suit};
+use poker_core::Card;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeatStatus {
@@ -77,9 +77,9 @@ impl GameState {
         self.players.iter().find(|p| p.name == name)
     }
 
+    #[cfg(test)]
     pub fn demo() -> Self {
-        use Rank::*;
-        use Suit::*;
+        use poker_core::{Rank::*, Suit::*};
 
         let card = Card::new;
 

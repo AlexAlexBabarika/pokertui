@@ -79,8 +79,8 @@ impl HandState {
                 Card::new(crate::Rank::Two, crate::Suit::Clubs),
             ]);
         }
-        for p in 0..n {
-            hole[p][1] = deck.remove(0);
+        for slot in hole.iter_mut() {
+            slot[1] = deck.remove(0);
         }
 
         // Blind positions.

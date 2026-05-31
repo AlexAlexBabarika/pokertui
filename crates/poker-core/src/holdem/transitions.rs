@@ -77,6 +77,11 @@ fn is_legal(state: &HandState, action: Action) -> bool {
 
 /// Apply one action by the current actor. Returns the new state on success,
 /// or `(state_unchanged, error)` on failure.
+//
+// Both Ok and Err are dominated by `HandState`, so the `Result` is large
+// regardless of the error variant. Boxing the Err would not shrink the
+// `Result` and would only add a heap allocation on the error path.
+#[allow(clippy::result_large_err)]
 pub fn apply(mut state: HandState, action: Action) -> Result<HandState, (HandState, ApplyError)> {
     let Some(actor) = state.to_act else {
         return Err((state, ApplyError::HandComplete));
