@@ -71,7 +71,11 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
                 }
             })
             .unwrap_or_else(|| "—".into());
-        let hole_cards = if PlayerId(i) == names.hero || engine.phase == EnginePhase::Complete {
+        // The hero always sees their own cards. At showdown the remaining
+        // (non-folded) players reveal; folded players' cards stay hidden, as in
+        // real poker — they mucked.
+        let revealed_at_showdown = engine.phase == EnginePhase::Complete && !engine.folded[i];
+        let hole_cards = if PlayerId(i) == names.hero || revealed_at_showdown {
             Some(engine.hole[i])
         } else {
             None
@@ -222,5 +226,34 @@ mod tests {
         assert_eq!(engine.phase, EnginePhase::Complete);
         let view = to_presentation(&engine, &NameRegistry::demo_six());
         assert_eq!(view.phase.pot, 0, "pot is empty once it has been paid out");
+    }
+
+    #[test]
+    fn folded_players_keep_cards_hidden_at_showdown() {
+        use poker_core::holdem::{Action, apply};
+        let cfg = HandConfig {
+            num_players: 6,
+            small_blind: 50,
+            big_blind: 100,
+            dealer: PlayerId(0),
+            seed: 1,
+        };
+        let mut engine = HandState::new_hand(cfg, vec![10_000; 6]);
+        // Folds around to the BB(2): UTG(3), MP(4), CO(5), BTN(0), SB(1) fold.
+        for _ in 0..5 {
+            engine = apply(engine, Action::Fold).unwrap();
+        }
+        assert_eq!(engine.phase, EnginePhase::Complete);
+        // Hero is PlayerId(3) per demo_six — folded, but still sees own cards.
+        let view = to_presentation(&engine, &NameRegistry::demo_six());
+        assert!(view.players[3].hole_cards.is_some(), "hero always sees own cards");
+        assert!(
+            view.players[4].hole_cards.is_none(),
+            "a folded non-hero player's cards stay hidden at showdown"
+        );
+        assert!(
+            view.players[2].hole_cards.is_some(),
+            "the surviving player (BB) reveals at showdown"
+        );
     }
 }
