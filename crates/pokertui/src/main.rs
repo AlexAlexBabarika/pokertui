@@ -1,3 +1,5 @@
+mod adapter;
+mod app;
 mod state;
 mod ui;
 
@@ -12,7 +14,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::state::GameState;
+use crate::app::App;
 
 const TICK: Duration = Duration::from_millis(50);
 
@@ -50,9 +52,10 @@ fn install_panic_hook() {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
-    let state = GameState::demo();
+    let mut app = App::new_demo_hand();
     loop {
-        terminal.draw(|frame| ui::render(frame, &state))?;
+        let view = app.view();
+        terminal.draw(|frame| ui::render(frame, &view))?;
 
         if event::poll(TICK)?
             && let Event::Key(key) = event::read()?
@@ -60,7 +63,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
         {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                _ => {}
+                code => {
+                    app.handle_key(code);
+                }
             }
         }
     }
