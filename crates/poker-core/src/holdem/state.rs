@@ -31,6 +31,7 @@ pub struct HandState {
     pub round_bet: Vec<u64>,
     pub folded: Vec<bool>,
     pub all_in: Vec<bool>,
+    pub acted_this_round: Vec<bool>,
     pub to_act: Option<PlayerId>,
     pub current_bet: u64,
     pub min_raise: u64,
@@ -109,6 +110,8 @@ impl HandState {
             kind: LogKind::PostBlind { amount: bb_amount, is_big: true },
         });
 
+        let acted_this_round = vec![false; n];
+
         HandState {
             config,
             phase: Phase::Preflop,
@@ -119,6 +122,7 @@ impl HandState {
             round_bet,
             folded: vec![false; n],
             all_in,
+            acted_this_round,
             to_act: Some(PlayerId(first_to_act)),
             current_bet: bb_amount,
             min_raise: config.big_blind,
@@ -128,6 +132,10 @@ impl HandState {
             winners: Vec::new(),
             deck,
         }
+    }
+
+    pub(crate) fn all_have_acted_this_round(&self, actionable: &[usize]) -> bool {
+        actionable.iter().all(|&i| self.acted_this_round[i])
     }
 }
 
