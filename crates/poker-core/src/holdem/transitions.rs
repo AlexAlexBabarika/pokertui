@@ -44,6 +44,31 @@ pub fn legal_actions(state: &HandState) -> Vec<Action> {
     out
 }
 
+/// Returns true if `action` is legal for the current actor.
+/// Bet/Raise variants here take *any* `to` between the min and max,
+/// not just the minimum the `legal_actions` summary returns.
+fn is_legal(state: &HandState, action: Action) -> bool {
+    let Some(actor) = state.to_act else { return false; };
+    let i = actor.0;
+    if state.folded[i] || state.all_in[i] { return false; }
+    match action {
+        Action::Fold => true,
+        Action::Check => state.round_bet[i] == state.current_bet,
+        Action::Call => state.current_bet > state.round_bet[i],
+        Action::Bet { to } => {
+            state.current_bet == 0
+                && to >= state.config.big_blind
+                && to <= state.round_bet[i] + state.stacks[i]
+        }
+        Action::Raise { to } => {
+            state.current_bet > 0
+                && to >= state.current_bet + state.min_raise
+                && to <= state.round_bet[i] + state.stacks[i]
+        }
+        Action::AllIn => state.stacks[i] > 0,
+    }
+}
+
 /// Apply one action by the current actor. Returns the new state on success,
 /// or `(state_unchanged, error)` on failure.
 pub fn apply(
@@ -54,8 +79,8 @@ pub fn apply(
         return Err((state, ApplyError::HandComplete));
     };
     let i = actor.0;
-    if !legal_actions(&state).contains(&action) {
-        return Err((state, ApplyError::IllegalAction("not in legal_actions")));
+    if !is_legal(&state, action) {
+        return Err((state, ApplyError::IllegalAction("illegal action")));
     }
 
     match action {
@@ -86,9 +111,60 @@ pub fn apply(
                 kind: super::state::LogKind::Action(Action::Call),
             });
         }
-        Action::Bet { .. } | Action::Raise { .. } | Action::AllIn => {
-            // implemented in later tasks
-            return Err((state, ApplyError::IllegalAction("bet/raise/all-in not yet wired")));
+        Action::Bet { to } => {
+            let extra = to - state.round_bet[i];
+            debug_assert!(extra <= state.stacks[i]);
+            state.stacks[i] -= extra;
+            state.round_bet[i] += extra;
+            state.contributed[i] += extra;
+            state.current_bet = to;
+            state.min_raise = to;
+            state.last_aggressor = Some(actor);
+            if state.stacks[i] == 0 { state.all_in[i] = true; }
+            state.log.push(super::state::LogEntry {
+                actor: Some(actor),
+                kind: super::state::LogKind::Action(Action::Bet { to }),
+            });
+        }
+        Action::Raise { to } => {
+            let raise_size = to - state.current_bet;
+            let extra = to - state.round_bet[i];
+            debug_assert!(extra <= state.stacks[i]);
+            state.stacks[i] -= extra;
+            state.round_bet[i] += extra;
+            state.contributed[i] += extra;
+            state.current_bet = to;
+            state.min_raise = raise_size;
+            state.last_aggressor = Some(actor);
+            if state.stacks[i] == 0 { state.all_in[i] = true; }
+            state.log.push(super::state::LogEntry {
+                actor: Some(actor),
+                kind: super::state::LogKind::Action(Action::Raise { to }),
+            });
+        }
+        Action::AllIn => {
+            let extra = state.stacks[i];
+            let new_to = state.round_bet[i] + extra;
+            let raise_size = new_to.saturating_sub(state.current_bet);
+            state.stacks[i] = 0;
+            state.round_bet[i] = new_to;
+            state.contributed[i] += extra;
+            state.all_in[i] = true;
+            if new_to > state.current_bet {
+                state.current_bet = new_to;
+                // Only a full-sized raise reopens betting and updates min_raise.
+                if raise_size >= state.min_raise {
+                    state.min_raise = raise_size;
+                    state.last_aggressor = Some(actor);
+                }
+                // Otherwise: under-shove. current_bet rises but last_aggressor
+                // and min_raise are unchanged → players who already acted at the
+                // old bet do NOT get to re-raise (only call the new amount).
+            }
+            state.log.push(super::state::LogEntry {
+                actor: Some(actor),
+                kind: super::state::LogKind::Action(Action::AllIn),
+            });
         }
     }
 
@@ -201,5 +277,47 @@ mod tests {
         assert_eq!(after.stacks[3], 0);
         assert_eq!(after.round_bet[3], 70);
         assert!(after.all_in[3], "all-in on short call");
+    }
+
+    #[test]
+    fn raise_to_300_updates_current_bet_and_min_raise() {
+        let s = HandState::new_hand(cfg6(), vec![10_000; 6]);
+        let after = apply(s, Action::Raise { to: 300 }).expect("legal raise");
+        assert_eq!(after.current_bet, 300);
+        assert_eq!(after.min_raise, 200, "raise size was 300-100=200");
+        assert_eq!(after.last_aggressor, Some(PlayerId(3)));
+        assert_eq!(after.stacks[3], 9_700);
+    }
+
+    #[test]
+    fn raise_below_min_is_illegal() {
+        let s = HandState::new_hand(cfg6(), vec![10_000; 6]);
+        // min raise-to is 200 (current 100 + min_raise 100); 150 is illegal
+        let result = apply(s, Action::Raise { to: 150 });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn all_in_for_less_than_min_raise_does_not_reopen_betting() {
+        // UTG has 180. Shove for 180 (current_bet 100 → new 180).
+        // 180-100 = 80 < min_raise (100), so betting does NOT reopen for the BB.
+        let mut stacks = vec![10_000u64; 6];
+        stacks[3] = 180;
+        let s = HandState::new_hand(cfg6(), stacks);
+        let after = apply(s, Action::AllIn).expect("legal shove");
+        assert_eq!(after.current_bet, 180);
+        assert_eq!(after.min_raise, 100, "min_raise unchanged on under-shove");
+        assert!(after.all_in[3]);
+    }
+
+    #[test]
+    fn all_in_for_a_full_raise_does_reopen_betting() {
+        let mut stacks = vec![10_000u64; 6];
+        stacks[3] = 300; // shove to 300 → raise of 200 ≥ min_raise 100 → reopens
+        let s = HandState::new_hand(cfg6(), stacks);
+        let after = apply(s, Action::AllIn).expect("legal shove");
+        assert_eq!(after.current_bet, 300);
+        assert_eq!(after.min_raise, 200);
+        assert_eq!(after.last_aggressor, Some(PlayerId(3)));
     }
 }
