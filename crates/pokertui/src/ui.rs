@@ -69,7 +69,7 @@ fn render_title_bar(frame: &mut Frame, area: Rect, state: &GameState) {
             Style::default().fg(pal::MUTED),
         ),
         Span::styled(
-            state.phase.label,
+            state.phase.label.as_str(),
             Style::default().fg(pal::LIME).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -133,9 +133,9 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
             break;
         }
         let line = Line::from(vec![
-            Span::styled(p.name, Style::default().fg(pal::DIM)),
+            Span::styled(p.name.as_str(), Style::default().fg(pal::DIM)),
             Span::styled(" · ", Style::default().fg(pal::DIM)),
-            Span::styled(p.pos, Style::default().fg(pal::DIM)),
+            Span::styled(p.pos.as_str(), Style::default().fg(pal::DIM)),
             Span::styled("  folded", Style::default().fg(pal::DIM)),
         ]);
         put_line(frame, folded_inner.x, folded_inner.y + i as u16, line);
@@ -268,14 +268,14 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     // Name · pos line.
     let mut name_spans = vec![
         Span::styled(
-            seat.name,
+            seat.name.as_str(),
             Style::default()
                 .fg(if hero { pal::LIME } else { Color::Reset })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" · ", Style::default().fg(pal::MUTED)),
         Span::styled(
-            seat.pos,
+            seat.pos.as_str(),
             Style::default().fg(if hero { pal::LIME } else { pal::MUTED }),
         ),
     ];
@@ -293,12 +293,12 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     let tag = if hero {
         if hero_is_actor { "▸ TO ACT" } else { "—" }
     } else {
-        seat.last_action
+        seat.last_action.as_str()
     };
     let tag_color = match (hero, seat.status) {
         (true, _) => pal::LIME,
         (_, SeatStatus::Folded) => pal::DIM,
-        _ => verb_color(seat.last_action),
+        _ => verb_color(&seat.last_action),
     };
     let info_line = Line::from(vec![
         Span::styled(
@@ -332,8 +332,8 @@ fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
         };
         match state.phase.board.get(i) {
             Some(&card) if i < state.phase.dealt => {
-                let fresh = matches!(state.phase.label, "TURN") && i == 3
-                    || matches!(state.phase.label, "RIVER" | "SHOWDOWN") && i == 4;
+                let fresh = matches!(state.phase.label.as_str(), "TURN") && i == 3
+                    || matches!(state.phase.label.as_str(), "RIVER" | "SHOWDOWN") && i == 4;
                 render_card(frame, slot, card, fresh);
             }
             _ => render_card_slot(frame, slot),
@@ -472,10 +472,10 @@ fn render_panel_hand(frame: &mut Frame, area: Rect, state: &GameState) {
     ]);
     let rank = Line::from(vec![
         Span::styled("▸ ", Style::default().fg(pal::LIME)),
-        Span::styled(state.phase.rank, Style::default().fg(Color::Reset)),
+        Span::styled(state.phase.rank.as_str(), Style::default().fg(Color::Reset)),
     ]);
     let hint = Line::from(Span::styled(
-        state.phase.hint,
+        state.phase.hint.as_str(),
         Style::default().fg(pal::MUTED),
     ));
     frame.render_widget(
