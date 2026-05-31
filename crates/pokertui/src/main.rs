@@ -1,3 +1,4 @@
+mod adapter;
 mod state;
 mod ui;
 
