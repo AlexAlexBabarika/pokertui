@@ -1,8 +1,34 @@
+use std::hash::{Hash, Hasher};
+
 use crossterm::event::KeyCode;
+use poker_core::Card;
+use poker_core::equity::hero_equity;
 use poker_core::holdem::{Action, HandConfig, HandState, Phase, PlayerId, apply, legal_actions};
 
 use crate::adapter::{NameRegistry, to_presentation};
 use crate::state::GameState;
+
+/// Monte Carlo trials per equity estimate. ~10k gives ±~1% accuracy and runs
+/// in a few milliseconds, far below the 50ms frame tick.
+const EQUITY_ITERS: u32 = 10_000;
+
+/// The inputs that determine the hero's equity. When this is unchanged between
+/// frames the cached estimate is reused, keeping the simulation off the
+/// per-frame repaint path.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct EquityKey {
+    hole: [Card; 2],
+    board: Vec<Card>,
+    live_opponents: usize,
+    /// False when the hero is folded/busted or the hand is complete — there is
+    /// no live equity to show.
+    hero_live: bool,
+}
+
+struct EquityCache {
+    key: EquityKey,
+    pct: u8,
+}
 
 pub struct App {
     // `Option` so a turn can move the engine out (apply consumes it by value)
@@ -15,6 +41,9 @@ pub struct App {
     raise_to: Option<u64>,
     /// Set once only one funded player remains: no further hands are dealt.
     game_over: bool,
+    /// Cached hero equity for the current engine state. Recomputed only when
+    /// the inputs change (a new street, a fold, a new hand), never per frame.
+    equity: Option<EquityCache>,
 }
 
 impl App {
@@ -34,6 +63,7 @@ impl App {
             names,
             raise_to: None,
             game_over: false,
+            equity: None,
         }
     }
 
@@ -65,13 +95,70 @@ impl App {
         (max >= min).then_some((min, max))
     }
 
-    pub fn view(&self) -> GameState {
+    pub fn view(&mut self) -> GameState {
+        let equity = self.equity_pct();
         let engine = self.engine();
         let mut gs = to_presentation(engine, &self.names);
         gs.phase.raise_to = Self::raise_bounds(engine)
             .map(|(min, max)| self.raise_to.unwrap_or(min).clamp(min, max));
+        gs.phase.equity = equity;
         gs.notice = self.notice();
         gs
+    }
+
+    /// The hero's cached win-chance percentage for the current state, refreshing
+    /// the Monte Carlo estimate only when the inputs have changed.
+    fn equity_pct(&mut self) -> u8 {
+        let key = self.equity_key();
+        if let Some(cache) = &self.equity
+            && cache.key == key
+        {
+            return cache.pct;
+        }
+        let pct = Self::compute_equity(&key);
+        self.equity = Some(EquityCache { key, pct });
+        pct
+    }
+
+    /// Fingerprint of everything that moves the hero's equity. Owns its data so
+    /// the engine borrow is released before the cache is written.
+    fn equity_key(&self) -> EquityKey {
+        let engine = self.engine();
+        let hero = self.names.hero;
+        let hero_live = engine.phase != Phase::Complete && !engine.folded[hero.0];
+        let live_opponents = if hero_live {
+            (0..engine.config.num_players)
+                .filter(|&i| PlayerId(i) != hero && !engine.folded[i])
+                .count()
+        } else {
+            0
+        };
+        EquityKey {
+            hole: engine.hole[hero.0],
+            board: engine.board.clone(),
+            live_opponents,
+            hero_live,
+        }
+    }
+
+    /// Run (or short-circuit) the equity simulation for a key. Deterministic:
+    /// the seed is derived from the key, so an unchanged situation always shows
+    /// the same number.
+    fn compute_equity(key: &EquityKey) -> u8 {
+        if !key.hero_live {
+            return 0;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        let seed = hasher.finish();
+        let eq = hero_equity(
+            key.hole,
+            &key.board,
+            key.live_opponents,
+            EQUITY_ITERS,
+            seed,
+        );
+        eq.pct().round() as u8
     }
 
     /// End-of-hand banner: the game-over message once one player remains, or the
@@ -181,6 +268,41 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equity_tracks_whether_the_hero_is_live() {
+        let mut app = App::new_demo_hand();
+        // Preflop, the hero is in the hand against several opponents: a real,
+        // non-trivial estimate.
+        let live = app.view().phase.equity;
+        assert!(
+            live > 0 && live < 100,
+            "a live hero has a real equity estimate, got {live}"
+        );
+        // The hero (UTG) is first to act preflop; folding sits them out and the
+        // estimate collapses to zero.
+        let hero = app.names.hero;
+        app.handle_key(KeyCode::Char('f'));
+        assert!(app.engine().folded[hero.0], "hero folded");
+        assert_eq!(
+            app.view().phase.equity,
+            0,
+            "a folded hero has no equity to show"
+        );
+    }
+
+    #[test]
+    fn equity_is_zero_at_showdown() {
+        let mut app = App::new_demo_hand();
+        while app.engine().phase != Phase::Complete {
+            app.handle_key(KeyCode::Char('f'));
+        }
+        assert_eq!(
+            app.view().phase.equity,
+            0,
+            "the panel stays quiet once the hand is complete"
+        );
+    }
 
     #[test]
     fn pressing_f_folds_current_actor() {
