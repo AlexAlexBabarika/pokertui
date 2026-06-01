@@ -508,12 +508,8 @@ fn render_panel_hand(frame: &mut Frame, area: Rect, state: &GameState) {
         Span::styled("▸ ", Style::default().fg(pal::LIME)),
         Span::styled(state.phase.rank.as_str(), Style::default().fg(Color::Reset)),
     ]);
-    let hint = Line::from(Span::styled(
-        state.phase.hint.as_str(),
-        Style::default().fg(pal::MUTED),
-    ));
     frame.render_widget(
-        Paragraph::new(vec![hole, rank, hint]).wrap(Wrap { trim: true }),
+        Paragraph::new(vec![hole, rank]).wrap(Wrap { trim: true }),
         inner,
     );
 }

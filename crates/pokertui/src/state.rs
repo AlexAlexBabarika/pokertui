@@ -58,7 +58,6 @@ pub struct Phase {
     pub equity: u8,    // 0..=100
     pub odds_pct: f32, // e.g. 24.5
     pub rank: String,
-    pub hint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -152,8 +151,7 @@ impl GameState {
                 to_call: 600,
                 equity: 38,
                 odds_pct: 24.5,
-                rank: "A-high · open-ender (needs T)".into(),
-                hint: "odds 24.5% < eq 38% — call is +EV".into(),
+                rank: "Two Pair".into(),
             },
             log: vec![
                 LogEntry {

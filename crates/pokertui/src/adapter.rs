@@ -96,6 +96,13 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         });
     }
 
+    // The hero's current made hand: their hole cards plus the visible board.
+    let mut hero_cards = engine.hole[names.hero.0].to_vec();
+    hero_cards.extend(engine.board.iter().copied());
+    let rank = poker_core::combination_name(&hero_cards)
+        .unwrap_or("—")
+        .into();
+
     let phase = Phase {
         label: phase_label(engine.phase),
         board: engine.board.clone(),
@@ -111,8 +118,7 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         to_call: to_call_for_hero(engine, names.hero),
         equity: 0,
         odds_pct: 0.0,
-        rank: "—".into(),
-        hint: "—".into(),
+        rank,
     };
 
     let log: Vec<LogEntry> = engine

@@ -155,11 +155,38 @@ impl Default for Deck {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HandStrength(rs_poker::core::Rank);
 
+impl HandStrength {
+    /// Human-readable name of the hand's category, e.g. "Two Pair".
+    pub fn name(self) -> &'static str {
+        use rs_poker::core::Rank::*;
+        match self.0 {
+            HighCard(_) => "High Card",
+            OnePair(_) => "Pair",
+            TwoPair(_) => "Two Pair",
+            ThreeOfAKind(_) => "Three of a Kind",
+            Straight(_) => "Straight",
+            Flush(_) => "Flush",
+            FullHouse(_) => "Full House",
+            FourOfAKind(_) => "Four of a Kind",
+            StraightFlush(_) => "Straight Flush",
+        }
+    }
+}
+
 /// Evaluate the best 5-card hand strength from 5–7 cards.
 pub fn evaluate(cards: &[Card]) -> HandStrength {
     use rs_poker::core::Rankable;
     let converted: Vec<rs_poker::core::Card> = cards.iter().copied().map(to_rs_card).collect();
     HandStrength(converted.rank())
+}
+
+/// Name of the best poker combination formed by `cards` (1–7 cards: hole cards
+/// plus whatever board is visible). Returns `None` when no cards are supplied.
+pub fn combination_name(cards: &[Card]) -> Option<&'static str> {
+    if cards.is_empty() {
+        return None;
+    }
+    Some(evaluate(cards).name())
 }
 
 /// Returns the cards that form the player's best made hand, with kickers
@@ -189,7 +216,10 @@ fn best_five(cards: &[Card]) -> Vec<Card> {
         if mask.count_ones() != 5 {
             continue;
         }
-        let hand: Vec<Card> = (0..n).filter(|i| mask & (1 << i) != 0).map(|i| cards[i]).collect();
+        let hand: Vec<Card> = (0..n)
+            .filter(|i| mask & (1 << i) != 0)
+            .map(|i| cards[i])
+            .collect();
         let strength = evaluate(&hand);
         if best.as_ref().is_none_or(|(b, _)| strength > *b) {
             best = Some((strength, hand));
