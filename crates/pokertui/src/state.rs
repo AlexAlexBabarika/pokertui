@@ -16,6 +16,8 @@ pub struct Seat {
     pub status: SeatStatus,
     pub last_action: String,
     pub hole_cards: Option<[Card; 2]>,
+    /// True when it is this seat's turn to act.
+    pub is_to_act: bool,
 }
 
 impl Seat {
@@ -56,7 +58,6 @@ pub struct Phase {
     pub equity: u8,    // 0..=100
     pub odds_pct: f32, // e.g. 24.5
     pub rank: String,
-    pub hint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -71,10 +72,6 @@ pub struct GameState {
 impl GameState {
     pub fn hero(&self) -> Option<&Seat> {
         self.players.iter().find(|p| p.is_hero())
-    }
-
-    pub fn by_name(&self, name: &str) -> Option<&Seat> {
-        self.players.iter().find(|p| p.name == name)
     }
 
     #[cfg(test)]
@@ -93,6 +90,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "delta".into(),
@@ -101,6 +99,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "gizmo".into(),
@@ -109,6 +108,7 @@ impl GameState {
                     status: SeatStatus::Active,
                     last_action: "call 600".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "you".into(),
@@ -117,6 +117,7 @@ impl GameState {
                     status: SeatStatus::Hero,
                     last_action: "—".into(),
                     hole_cards: Some([card(Ace, Spades), card(King, Hearts)]),
+                    is_to_act: true,
                 },
                 Seat {
                     name: "maple".into(),
@@ -125,6 +126,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "rook".into(),
@@ -133,6 +135,7 @@ impl GameState {
                     status: SeatStatus::Bet,
                     last_action: "bet 600".into(),
                     hole_cards: Some([card(King, Clubs), card(Queen, Diamonds)]),
+                    is_to_act: false,
                 },
             ],
             phase: Phase {
@@ -148,8 +151,7 @@ impl GameState {
                 to_call: 600,
                 equity: 38,
                 odds_pct: 24.5,
-                rank: "A-high · open-ender (needs T)".into(),
-                hint: "odds 24.5% < eq 38% — call is +EV".into(),
+                rank: "Two Pair".into(),
             },
             log: vec![
                 LogEntry {

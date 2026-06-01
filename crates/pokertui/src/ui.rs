@@ -44,8 +44,23 @@ pub fn render(frame: &mut Frame, state: &GameState) {
     let [table_area, rail_area] =
         Layout::horizontal([Constraint::Min(40), Constraint::Length(rail_w)]).areas(body);
 
-    render_table(frame, table_area, state);
+    // Cards that form the hero's current made hand (hole + visible board),
+    // kickers excluded. These render green wherever they appear.
+    let highlight = hero_made_cards(state);
+
+    render_table(frame, table_area, state, &highlight);
     render_rail(frame, rail_area, state);
+}
+
+/// The hero's made-hand cards for the current street, or empty if no hero /
+/// no hole cards yet.
+fn hero_made_cards(state: &GameState) -> Vec<Card> {
+    let Some(hole) = state.hero().and_then(|h| h.hole_cards) else {
+        return Vec::new();
+    };
+    let mut cards = hole.to_vec();
+    cards.extend(state.phase.board.iter().take(state.phase.dealt).copied());
+    poker_core::made_hand_cards(&cards)
 }
 
 fn render_too_small(frame: &mut Frame, area: Rect) {
@@ -80,16 +95,16 @@ fn render_title_bar(frame: &mut Frame, area: Rect, state: &GameState) {
 
 // ---------------------------------------------------------------- table ------
 
-fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_table(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     // Vertical regions inside the table column:
     //   row 0   : (in body coords) spacer / divider header
     //   rows 1..top_h : opponent strip
     //   middle  : pot + board, centered
     //   bottom  : hero pod + action bar + key hints
     //
-    // Bottom block height: 6 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 13
-    let bottom_h: u16 = 13;
-    let top_h: u16 = 8;
+    // Bottom block height: 7 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 14
+    let bottom_h: u16 = 14;
+    let top_h: u16 = 9;
     let [top_strip, middle, bottom] = Layout::vertical([
         Constraint::Length(top_h),
         Constraint::Min(5),
@@ -98,35 +113,50 @@ fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
     .areas(area);
 
     render_opponents(frame, top_strip, state);
-    render_center(frame, middle, state);
-    render_bottom(frame, bottom, state);
+    render_center(frame, middle, state, highlight);
+    render_bottom(frame, bottom, state, highlight);
 }
 
 fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
-    // Two active pods on the left, folded-roster on the right.
-    let [active_col, _, folded_col] = Layout::horizontal([
-        Constraint::Length(48),
-        Constraint::Length(2),
-        Constraint::Min(0),
-    ])
-    .areas(area);
-
-    let [rook_slot, gizmo_slot] =
-        Layout::horizontal([Constraint::Length(22), Constraint::Min(22)]).areas(active_col);
-
-    if let Some(rook) = state.by_name("rook") {
-        render_pod(frame, inset(rook_slot, 2, 1), rook, false);
-    }
-    if let Some(gizmo) = state.by_name("gizmo") {
-        render_pod(frame, inset(gizmo_slot, 2, 1), gizmo, false);
-    }
-
-    // Folded names, stacked.
+    // Opponents are everyone but the hero. Those still in the hand get a live
+    // pod on the left; those who have folded drop to a roster on the right.
+    // Driven entirely off seat status so any table size / fold pattern renders.
+    let active: Vec<&Seat> = state
+        .players
+        .iter()
+        .filter(|p| !p.is_hero() && p.status != SeatStatus::Folded)
+        .collect();
     let folded: Vec<&Seat> = state
         .players
         .iter()
-        .filter(|p| p.status == SeatStatus::Folded)
+        .filter(|p| !p.is_hero() && p.status == SeatStatus::Folded)
         .collect();
+
+    // Reserve a roster column only when someone has folded; otherwise pods
+    // take the whole strip.
+    let roster_w: u16 = if folded.is_empty() { 0 } else { 18 };
+    let [active_col, folded_col] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(roster_w)]).areas(area);
+
+    // Lay the active pods left-to-right in equal slots: two opponents get room
+    // to breathe, five still fit (clipping gracefully when cramped).
+    if !active.is_empty() {
+        let slot_w = (active_col.width / active.len() as u16).max(1);
+        let mut x = active_col.x;
+        for p in &active {
+            let slot = Rect {
+                x,
+                y: active_col.y,
+                width: slot_w,
+                height: active_col.height,
+            };
+            // Opponent cards stay face-down, so no combination can highlight.
+            render_pod(frame, inset(slot, 2, 1), p, false, &[]);
+            x = x.saturating_add(slot_w);
+        }
+    }
+
+    // Folded names, stacked.
     let folded_inner = inset(folded_col, 0, 1);
     for (i, p) in folded.iter().enumerate() {
         if (i as u16) >= folded_inner.height {
@@ -142,9 +172,9 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
     }
 }
 
-fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
-    // Board (4 tall) sits below pot pill (1 tall) with a 1-row gap.
-    let needed_h: u16 = 1 + 1 + CARD_H;
+fn render_center(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
+    // Board sits below pot pill (1 tall) with a 1-row gap.
+    let needed_h: u16 = 1 + 1 + BOARD_CARD_H;
     let block_h = needed_h.min(area.height);
     let block = Rect {
         x: area.x,
@@ -155,17 +185,17 @@ fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
     let [pot_row, _, board_row] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(CARD_H),
+        Constraint::Length(BOARD_CARD_H),
     ])
     .areas(block);
 
     render_pot_pill(frame, pot_row, state);
-    render_board(frame, board_row, state);
+    render_board(frame, board_row, state, highlight);
 }
 
-fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     let [hero_row, _gap, action_row, _gap2, hints_row] = Layout::vertical([
-        Constraint::Length(6),
+        Constraint::Length(7),
         Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Length(1),
@@ -174,9 +204,9 @@ fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
     .areas(area);
 
     if let Some(hero) = state.hero() {
-        // Hero pod is 10 wide × 6 tall, centered.
-        let pod_area = centered_rect(hero_row, POD_W, 6);
-        render_pod(frame, pod_area, hero, true);
+        // Hero pod is 10 wide × 7 tall, centered.
+        let pod_area = centered_rect(hero_row, POD_W, 7);
+        render_pod(frame, pod_area, hero, true, highlight);
     }
 
     let action_area = inset(action_row, 2, 0);
@@ -202,7 +232,7 @@ fn render_rail(frame: &mut Frame, area: Rect, state: &GameState) {
 
     let inner = inset(inner, 1, 1);
     // Stack: HAND (5) · gap (1) · EQUITY (5) · gap (1) · LOG (flex) · gap (1) · CHAT (6)
-    let hand_h: u16 = 5;
+    let hand_h: u16 = 4;
     let eq_h: u16 = 5;
     let chat_h: u16 = 6;
     let gap: u16 = 1;
@@ -233,18 +263,23 @@ const CARD_W: u16 = 5;
 const CARD_H: u16 = 4;
 const POD_W: u16 = CARD_W * 2; // 10
 
-fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
+// Community cards in the centre are drawn larger than the seat cards.
+const BOARD_CARD_W: u16 = 7;
+const BOARD_CARD_H: u16 = 5;
+
+fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool, highlight: &[Card]) {
     let hero = seat.is_hero();
-    // Pod is 10 wide × 6 tall — clip what we got.
+    // Pod is 10 wide × 7 tall — clip what we got.
     let pod = Rect {
         width: POD_W.min(area.width),
-        height: 6.min(area.height),
+        height: 7.min(area.height),
         ..area
     };
 
     // Cards row (rows 0..=3).
-    let [cards_row, name_row, info_row] = Layout::vertical([
+    let [cards_row, name_row, info_row, action_row] = Layout::vertical([
         Constraint::Length(CARD_H),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -256,8 +291,8 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     let face_up = hero;
     match (face_up, seat.hole_cards) {
         (true, Some([c0, c1])) => {
-            render_card(frame, left_card, c0, hero);
-            render_card(frame, right_card, c1, hero);
+            render_card(frame, left_card, c0, highlight.contains(&c0));
+            render_card(frame, right_card, c1, highlight.contains(&c1));
         }
         _ => {
             render_card_back(frame, left_card);
@@ -265,18 +300,19 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
         }
     }
 
-    // Name · pos line.
+    // Name · pos line. Highlights whoever is to act — hero or opponent.
+    let to_act = seat.is_to_act;
     let mut name_spans = vec![
         Span::styled(
             seat.name.as_str(),
             Style::default()
-                .fg(if hero { pal::LIME } else { Color::Reset })
+                .fg(if to_act { pal::LIME } else { Color::Reset })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" · ", Style::default().fg(pal::MUTED)),
         Span::styled(
             seat.pos.as_str(),
-            Style::default().fg(if hero { pal::LIME } else { pal::MUTED }),
+            Style::default().fg(if to_act { pal::LIME } else { pal::MUTED }),
         ),
     ];
     if hero {
@@ -288,8 +324,15 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     }
     put_line(frame, name_row.x, name_row.y, Line::from(name_spans));
 
-    // Info line: ◉ stack   <tag>
+    // Info line: ◉ stack
     let chip_seg = format!("◉ {}", fmt_int(seat.stack));
+    let info_line = Line::from(Span::styled(
+        chip_seg,
+        Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
+    ));
+    put_line(frame, info_row.x, info_row.y, info_line);
+
+    // Action line
     let tag = if hero {
         if hero_is_actor { "▸ TO ACT" } else { "—" }
     } else {
@@ -300,45 +343,36 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
         (_, SeatStatus::Folded) => pal::DIM,
         _ => verb_color(&seat.last_action),
     };
-    let info_line = Line::from(vec![
-        Span::styled(
-            chip_seg,
-            Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            tag,
-            Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    put_line(frame, info_row.x, info_row.y, info_line);
+    let action_line = Line::from(Span::styled(
+        tag,
+        Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+    ));
+    put_line(frame, action_row.x, action_row.y, action_line);
 }
 
 // ---------------------------------------------------------------- board ------
 
-fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_board(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     let slots = 5u16;
-    let gap = 1u16;
-    let total_w = slots * CARD_W + (slots - 1) * gap;
-    let strip = centered_rect(area, total_w, CARD_H);
+    let gap = 2u16;
+    let total_w = slots * BOARD_CARD_W + (slots - 1) * gap;
+    let strip = centered_rect(area, total_w, BOARD_CARD_H);
 
     let mut x = strip.x;
     for i in 0..slots as usize {
         let slot = Rect {
             x,
             y: strip.y,
-            width: CARD_W,
-            height: CARD_H,
+            width: BOARD_CARD_W,
+            height: BOARD_CARD_H,
         };
         match state.phase.board.get(i) {
             Some(&card) if i < state.phase.dealt => {
-                let fresh = matches!(state.phase.label.as_str(), "TURN") && i == 3
-                    || matches!(state.phase.label.as_str(), "RIVER" | "SHOWDOWN") && i == 4;
-                render_card(frame, slot, card, fresh);
+                render_card(frame, slot, card, highlight.contains(&card));
             }
             _ => render_card_slot(frame, slot),
         }
-        x += CARD_W + gap;
+        x += BOARD_CARD_W + gap;
     }
 }
 
@@ -474,12 +508,8 @@ fn render_panel_hand(frame: &mut Frame, area: Rect, state: &GameState) {
         Span::styled("▸ ", Style::default().fg(pal::LIME)),
         Span::styled(state.phase.rank.as_str(), Style::default().fg(Color::Reset)),
     ]);
-    let hint = Line::from(Span::styled(
-        state.phase.hint.as_str(),
-        Style::default().fg(pal::MUTED),
-    ));
     frame.render_widget(
-        Paragraph::new(vec![hole, rank, hint]).wrap(Wrap { trim: true }),
+        Paragraph::new(vec![hole, rank]).wrap(Wrap { trim: true }),
         inner,
     );
 }
@@ -672,7 +702,7 @@ impl Widget for CardFace {
 
         let color = suit_color(self.card.suit());
         let rank = rank_label(self.card.rank());
-        // Inner is 3×2: rank top-left, suit at (1,1) of inner.
+        // Rank always sits in the top-left corner.
         write_str(
             buf,
             inner.x,
@@ -680,8 +710,16 @@ impl Widget for CardFace {
             rank,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         );
-        let suit_x = inner.x + 1;
-        let suit_y = inner.y + 1;
+        // Suit pip: tucked diagonally under the rank on the compact seat
+        // cards (3×2 inner), or centred as a big pip on the larger board cards.
+        let (suit_x, suit_y) = if inner.height >= 3 {
+            (
+                inner.x + inner.width.saturating_sub(1) / 2,
+                inner.y + inner.height / 2,
+            )
+        } else {
+            (inner.x + 1, inner.y + 1)
+        };
         let suit = suit_glyph(self.card.suit());
         write_str(
             buf,
@@ -863,11 +901,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn dump(width: u16, height: u16) -> String {
+    fn dump_state(state: &GameState, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        let state = GameState::demo();
-        terminal.draw(|frame| render(frame, &state)).expect("draw");
+        terminal.draw(|frame| render(frame, state)).expect("draw");
         let buf = terminal.backend().buffer().clone();
         let mut out = String::new();
         for y in 0..buf.area.height {
@@ -877,6 +914,10 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    fn dump(width: u16, height: u16) -> String {
+        dump_state(&GameState::demo(), width, height)
     }
 
     #[test]
@@ -901,6 +942,46 @@ mod tests {
         assert!(frame.contains("gizmo"), "active opponent missing");
         assert!(frame.contains("nova"), "folded opponent missing");
         assert!(frame.contains("nice spot"), "chat content missing");
+    }
+
+    #[test]
+    fn every_active_opponent_is_shown() {
+        // A live hand opens with all opponents in. They must all be visible,
+        // not just the two the workbench happened to leave active.
+        let mut state = GameState::demo();
+        for p in &mut state.players {
+            if !p.is_hero() {
+                p.status = SeatStatus::Active;
+                p.last_action = "—".into();
+            }
+        }
+        let frame = dump_state(&state, 120, 40);
+        for name in ["nova", "delta", "gizmo", "maple", "rook"] {
+            assert!(frame.contains(name), "active opponent {name} not shown");
+        }
+    }
+
+    #[test]
+    fn a_folded_opponent_is_shown_once_as_folded() {
+        // When an opponent folds they should drop to the folded roster — not
+        // keep a live pod while also appearing in the roster.
+        let mut state = GameState::demo();
+        for p in &mut state.players {
+            if p.name == "rook" {
+                p.status = SeatStatus::Folded;
+                p.last_action = "fold".into();
+            }
+        }
+        let frame = dump_state(&state, 120, 40);
+        // The opponent strip lives in the top rows; the log/chat panels below
+        // also name "rook", so scope the duplication check to those rows.
+        let strip: String = frame.lines().take(9).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            strip.matches("rook").count(),
+            1,
+            "a folded opponent should appear once, in the roster — not also as a live pod"
+        );
+        assert!(strip.contains("folded"), "fold status not surfaced");
     }
 
     #[test]

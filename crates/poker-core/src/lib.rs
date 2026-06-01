@@ -155,11 +155,135 @@ impl Default for Deck {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HandStrength(rs_poker::core::Rank);
 
+impl HandStrength {
+    /// Human-readable name of the hand's category, e.g. "Two Pair".
+    pub fn name(self) -> &'static str {
+        use rs_poker::core::Rank::*;
+        match self.0 {
+            HighCard(_) => "High Card",
+            OnePair(_) => "Pair",
+            TwoPair(_) => "Two Pair",
+            ThreeOfAKind(_) => "Three of a Kind",
+            Straight(_) => "Straight",
+            Flush(_) => "Flush",
+            FullHouse(_) => "Full House",
+            FourOfAKind(_) => "Four of a Kind",
+            StraightFlush(_) => "Straight Flush",
+        }
+    }
+}
+
 /// Evaluate the best 5-card hand strength from 5–7 cards.
 pub fn evaluate(cards: &[Card]) -> HandStrength {
     use rs_poker::core::Rankable;
     let converted: Vec<rs_poker::core::Card> = cards.iter().copied().map(to_rs_card).collect();
     HandStrength(converted.rank())
+}
+
+/// Name of the best poker combination formed by `cards` (1–7 cards: hole cards
+/// plus whatever board is visible). Returns `None` when no cards are supplied.
+pub fn combination_name(cards: &[Card]) -> Option<&'static str> {
+    if cards.is_empty() {
+        return None;
+    }
+    Some(evaluate(cards).name())
+}
+
+/// Returns the cards that form the player's best made hand, with kickers
+/// excluded. Accepts 2–7 cards (hole cards plus whatever board is visible).
+/// The returned cards are a subset of the input (matched by identity), in no
+/// particular order.
+pub fn made_hand_cards(cards: &[Card]) -> Vec<Card> {
+    if cards.is_empty() {
+        return Vec::new();
+    }
+    // The combination is drawn from the best five-card hand. With five or fewer
+    // cards there is nothing to choose; with more, rank every five-card subset
+    // and keep the strongest.
+    let best = if cards.len() <= 5 {
+        cards.to_vec()
+    } else {
+        best_five(cards)
+    };
+    combination_cards(&best)
+}
+
+/// Pick the strongest five-card subset out of 6–7 cards.
+fn best_five(cards: &[Card]) -> Vec<Card> {
+    let n = cards.len();
+    let mut best: Option<(HandStrength, Vec<Card>)> = None;
+    for mask in 0u32..(1 << n) {
+        if mask.count_ones() != 5 {
+            continue;
+        }
+        let hand: Vec<Card> = (0..n)
+            .filter(|i| mask & (1 << i) != 0)
+            .map(|i| cards[i])
+            .collect();
+        let strength = evaluate(&hand);
+        if best.as_ref().is_none_or(|(b, _)| strength > *b) {
+            best = Some((strength, hand));
+        }
+    }
+    best.map(|(_, h)| h).unwrap_or_else(|| cards.to_vec())
+}
+
+/// Given a made hand (2–5 cards), return only the cards that define its
+/// category, dropping kickers.
+fn combination_cards(hand: &[Card]) -> Vec<Card> {
+    if hand.is_empty() {
+        return Vec::new();
+    }
+
+    // Straights and flushes only exist with a full five cards; when they do,
+    // every card is part of the combination.
+    if hand.len() == 5 && (is_flush(hand) || is_straight(hand)) {
+        return hand.to_vec();
+    }
+
+    // Group by rank so we can read off pairs/trips/quads.
+    let mut groups: std::collections::BTreeMap<Rank, Vec<Card>> = std::collections::BTreeMap::new();
+    for &c in hand {
+        groups.entry(c.rank()).or_default().push(c);
+    }
+
+    let trips: Vec<&Vec<Card>> = groups.values().filter(|g| g.len() == 3).collect();
+    let pairs: Vec<&Vec<Card>> = groups.values().filter(|g| g.len() == 2).collect();
+
+    // Full house: a three and a pair → all five.
+    if !trips.is_empty() && !pairs.is_empty() {
+        return hand.to_vec();
+    }
+    // Four of a kind.
+    if let Some(quad) = groups.values().find(|g| g.len() == 4) {
+        return quad.clone();
+    }
+    // Three of a kind.
+    if let Some(set) = trips.first() {
+        return (*set).clone();
+    }
+    // One or two pair: every paired card (two cards, or four for two pair).
+    if !pairs.is_empty() {
+        return pairs.into_iter().flatten().copied().collect();
+    }
+    // High card: the single highest card that plays.
+    let top = hand.iter().copied().max_by_key(|c| c.rank()).unwrap();
+    vec![top]
+}
+
+fn is_flush(hand: &[Card]) -> bool {
+    hand.iter().all(|c| c.suit() == hand[0].suit())
+}
+
+fn is_straight(hand: &[Card]) -> bool {
+    let mut vals: Vec<u8> = hand.iter().map(|c| c.rank() as u8).collect();
+    vals.sort_unstable();
+    vals.dedup();
+    if vals.len() != 5 {
+        return false;
+    }
+    // Normal run, or the A-2-3-4-5 wheel (Ace high in the enum, low here).
+    vals[4] - vals[0] == 4 || vals == [0, 1, 2, 3, 12]
 }
 
 fn to_rs_card(c: Card) -> rs_poker::core::Card {
@@ -339,5 +463,72 @@ mod tests {
         let wheel = evaluate(&h("Ah 2d 3c 4s 5h 8c 9d"));
         let six_high = evaluate(&h("6h 5d 4c 3s 2h 9c Qd"));
         assert!(six_high > wheel);
+    }
+
+    /// Sort a card list so set comparisons ignore order.
+    fn sorted(mut cards: Vec<Card>) -> Vec<Card> {
+        cards.sort_by_key(|c| (c.rank() as u8, c.suit() as u8));
+        cards
+    }
+
+    fn made(s: &str) -> Vec<Card> {
+        sorted(made_hand_cards(&h(s)))
+    }
+
+    #[test]
+    fn made_hand_two_pair_excludes_kicker() {
+        // Kh 4h + board 8d Ks Js 5c 8s → two pair (KK + 88), J kicker dropped.
+        assert_eq!(made("Kh 4h 8d Ks Js 5c 8s"), sorted(h("Kh Ks 8d 8s")));
+    }
+
+    #[test]
+    fn made_hand_one_pair_is_just_the_pair() {
+        assert_eq!(made("Kh 4h 8d Ks Js 5c 2d"), sorted(h("Kh Ks")));
+    }
+
+    #[test]
+    fn made_hand_trips_is_three_cards() {
+        assert_eq!(made("Kh Kd 8d Ks Js 5c 2d"), sorted(h("Kh Kd Ks")));
+    }
+
+    #[test]
+    fn made_hand_quads_excludes_kicker() {
+        assert_eq!(made("Kh Kd 8d Ks Kc Js 2d"), sorted(h("Kh Kd Ks Kc")));
+    }
+
+    #[test]
+    fn made_hand_straight_is_all_five() {
+        assert_eq!(made("9h 8d 7c 6s 5h 2c Ad"), sorted(h("9h 8d 7c 6s 5h")));
+    }
+
+    #[test]
+    fn made_hand_wheel_straight_is_all_five() {
+        assert_eq!(made("Ah 2d 3c 4s 5h Kc Qd"), sorted(h("Ah 2d 3c 4s 5h")));
+    }
+
+    #[test]
+    fn made_hand_flush_is_all_five() {
+        assert_eq!(made("Ah Kh 9h 7h 5h 2c 3d"), sorted(h("Ah Kh 9h 7h 5h")));
+    }
+
+    #[test]
+    fn made_hand_full_house_is_all_five() {
+        // Trips + two pair on the board → boat uses three kings + two eights.
+        assert_eq!(made("Kh Kd 8d Ks 8s 2c 3d"), sorted(h("Kh Kd Ks 8d 8s")));
+    }
+
+    #[test]
+    fn made_hand_high_card_is_single_top_card() {
+        assert_eq!(made("Ah Kd 9c 7s 5h 3d 2c"), sorted(h("Ah")));
+    }
+
+    #[test]
+    fn made_hand_preflop_pair_highlights_both() {
+        assert_eq!(made("Kh Ks"), sorted(h("Kh Ks")));
+    }
+
+    #[test]
+    fn made_hand_preflop_high_card_highlights_top() {
+        assert_eq!(made("Kh 4d"), sorted(h("Kh")));
     }
 }
