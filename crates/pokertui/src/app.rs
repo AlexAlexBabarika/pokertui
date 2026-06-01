@@ -1,5 +1,5 @@
 use crossterm::event::KeyCode;
-use poker_core::holdem::{Action, HandConfig, HandState, PlayerId, apply, legal_actions};
+use poker_core::holdem::{Action, HandConfig, HandState, Phase, PlayerId, apply, legal_actions};
 
 use crate::adapter::{NameRegistry, to_presentation};
 use crate::state::GameState;
@@ -13,21 +13,19 @@ pub struct App {
     /// Currently selected raise/bet to-level. `None` = untouched → use min.
     /// Reset to `None` after every committed action.
     raise_to: Option<u64>,
+    /// Set once only one funded player remains: no further hands are dealt.
+    game_over: bool,
 }
 
 impl App {
     pub fn new_demo_hand() -> Self {
-        // Seed from the wall clock so each launch deals a different hand.
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0xC0FFEE);
         let cfg = HandConfig {
             num_players: 6,
             small_blind: 50,
             big_blind: 100,
             dealer: PlayerId(0),
-            seed,
+            // Seed from the wall clock so each launch deals a different hand.
+            seed: Self::fresh_seed(),
         };
         let engine = HandState::new_hand(cfg, vec![10_000; 6]);
         let names = NameRegistry::demo_six();
@@ -35,7 +33,16 @@ impl App {
             engine: Some(engine),
             names,
             raise_to: None,
+            game_over: false,
         }
+    }
+
+    /// A fresh seed off the wall clock so each hand deals differently.
+    fn fresh_seed() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xC0FFEE)
     }
 
     /// The current engine state. Always present between turns.
@@ -59,14 +66,50 @@ impl App {
     }
 
     pub fn view(&self) -> GameState {
-        let mut gs = to_presentation(self.engine(), &self.names);
-        gs.phase.raise_to = Self::raise_bounds(self.engine())
+        let engine = self.engine();
+        let mut gs = to_presentation(engine, &self.names);
+        gs.phase.raise_to = Self::raise_bounds(engine)
             .map(|(min, max)| self.raise_to.unwrap_or(min).clamp(min, max));
+        gs.notice = self.notice();
         gs
+    }
+
+    /// End-of-hand banner: the game-over message once one player remains, or the
+    /// "press a key" prompt while a finished hand is on screen. `None` mid-hand.
+    fn notice(&self) -> Option<String> {
+        let engine = self.engine();
+        if engine.phase != Phase::Complete {
+            return None;
+        }
+        if self.game_over || engine.funded_seats() < 2 {
+            let winner = engine
+                .stacks
+                .iter()
+                .position(|&s| s > 0)
+                .map(|i| self.names.names[i].as_str())
+                .unwrap_or("nobody");
+            return Some(format!("GAME OVER · {winner} wins — press Q to quit"));
+        }
+        Some("hand complete · press any key for the next hand".into())
     }
 
     /// Returns true if the key was consumed (engine state may have changed).
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
+        // Once a hand is complete, any key deals the next one — unless only one
+        // player still has chips, in which case the game is over.
+        if self.engine().phase == Phase::Complete {
+            if self.game_over {
+                return false;
+            }
+            if self.engine().funded_seats() < 2 {
+                self.game_over = true;
+                return false;
+            }
+            let next = self.engine().next_hand(Self::fresh_seed());
+            self.engine = Some(next);
+            self.raise_to = None;
+            return true;
+        }
         if self.engine().to_act.is_none() {
             return false;
         }
@@ -207,5 +250,79 @@ mod tests {
         app.handle_key(KeyCode::Char('r')); // commit raise to 250
         let min = app.engine().current_bet + app.engine().min_raise;
         assert_eq!(app.view().phase.raise_to, Some(min));
+    }
+
+    fn fold_to_completion(app: &mut App) {
+        // Fold every actor in turn until one player remains and the hand ends.
+        while app.engine().phase != Phase::Complete {
+            assert!(
+                app.handle_key(KeyCode::Char('f')),
+                "fold should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn any_key_at_complete_deals_next_hand_carrying_stacks() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+        assert_eq!(app.engine().phase, Phase::Complete);
+        let total_before: u64 = app.engine().stacks.iter().sum();
+
+        let consumed = app.handle_key(KeyCode::Char(' ')); // any key advances
+        assert!(consumed, "a key at COMPLETE should deal the next hand");
+        assert_eq!(app.engine().phase, Phase::Preflop, "fresh hand dealt");
+        assert_eq!(app.engine().board.len(), 0, "new board");
+        // Chips are conserved: the new blinds just moved from stacks into the pot.
+        let total_after: u64 =
+            app.engine().stacks.iter().sum::<u64>() + app.engine().contributed.iter().sum::<u64>();
+        assert_eq!(total_after, total_before, "chips carry over between hands");
+    }
+
+    #[test]
+    fn key_does_nothing_once_only_one_player_is_funded() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+        // Force a busted table: a single funded seat remains.
+        app.engine.as_mut().unwrap().stacks = vec![0, 0, 0, 60_000, 0, 0];
+
+        let consumed = app.handle_key(KeyCode::Char(' '));
+        assert!(!consumed, "no next hand with fewer than two funded seats");
+        assert_eq!(
+            app.engine().phase,
+            Phase::Complete,
+            "stays on the last hand"
+        );
+        assert!(
+            app.view().notice.unwrap().contains("GAME OVER"),
+            "game-over banner shown"
+        );
+    }
+
+    #[test]
+    fn game_over_notice_names_the_surviving_player() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+        app.engine.as_mut().unwrap().stacks = vec![0, 0, 0, 60_000, 0, 0];
+        app.handle_key(KeyCode::Char(' '));
+        let notice = app.view().notice.expect("game-over notice present");
+        assert!(
+            notice.contains("you"),
+            "names the surviving player (hero idx 3)"
+        );
+    }
+
+    #[test]
+    fn complete_hand_shows_a_continue_hint() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+        let notice = app
+            .view()
+            .notice
+            .expect("continue hint present at COMPLETE");
+        assert!(
+            notice.to_lowercase().contains("key"),
+            "hint mentions pressing a key"
+        );
     }
 }

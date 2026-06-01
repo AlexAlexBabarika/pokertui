@@ -57,6 +57,10 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         let pos = position_label(offset, n);
         let status = if PlayerId(i) == names.hero {
             SeatStatus::Hero
+        } else if engine.folded[i] && engine.stacks[i] == 0 {
+            // A normally-folded player always keeps chips (you cannot fold while
+            // all-in), so folded-and-broke uniquely marks a sat-out busted seat.
+            SeatStatus::Busted
         } else if engine.folded[i] {
             SeatStatus::Folded
         } else if Some(PlayerId(i)) == engine.last_aggressor {
@@ -145,6 +149,8 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         phase,
         log,
         chat: Vec::<ChatLine>::new(),
+        // The App owns end-of-hand / game-over messaging; default to none here.
+        notice: None,
     }
 }
 

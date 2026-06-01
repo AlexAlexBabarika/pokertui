@@ -6,6 +6,8 @@ pub enum SeatStatus {
     Active,
     Bet,
     Folded,
+    /// Out of chips — sitting out the hand, shown alongside folded players.
+    Busted,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,9 @@ pub struct GameState {
     pub phase: Phase,
     pub log: Vec<LogEntry>,
     pub chat: Vec<ChatLine>,
+    /// A transient banner shown over the table: the "press a key" prompt at the
+    /// end of a hand, or the game-over message. `None` during live play.
+    pub notice: Option<String>,
 }
 
 impl GameState {
@@ -233,6 +238,7 @@ impl GameState {
                     msg: "tank-calling…".into(),
                 },
             ],
+            notice: None,
         }
     }
 }
