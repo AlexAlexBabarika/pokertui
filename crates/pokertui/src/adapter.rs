@@ -92,6 +92,7 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
             status,
             last_action,
             hole_cards,
+            is_to_act: engine.to_act == Some(PlayerId(i)),
         });
     }
 

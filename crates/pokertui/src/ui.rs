@@ -284,18 +284,19 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
         }
     }
 
-    // Name · pos line.
+    // Name · pos line. Highlights whoever is to act — hero or opponent.
+    let to_act = seat.is_to_act;
     let mut name_spans = vec![
         Span::styled(
             seat.name.as_str(),
             Style::default()
-                .fg(if hero { pal::LIME } else { Color::Reset })
+                .fg(if to_act { pal::LIME } else { Color::Reset })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" · ", Style::default().fg(pal::MUTED)),
         Span::styled(
             seat.pos.as_str(),
-            Style::default().fg(if hero { pal::LIME } else { pal::MUTED }),
+            Style::default().fg(if to_act { pal::LIME } else { pal::MUTED }),
         ),
     ];
     if hero {

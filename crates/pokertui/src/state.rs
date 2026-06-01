@@ -16,6 +16,8 @@ pub struct Seat {
     pub status: SeatStatus,
     pub last_action: String,
     pub hole_cards: Option<[Card; 2]>,
+    /// True when it is this seat's turn to act. 
+    pub is_to_act: bool,
 }
 
 impl Seat {
@@ -89,6 +91,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "delta".into(),
@@ -97,6 +100,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "gizmo".into(),
@@ -105,6 +109,7 @@ impl GameState {
                     status: SeatStatus::Active,
                     last_action: "call 600".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "you".into(),
@@ -113,6 +118,7 @@ impl GameState {
                     status: SeatStatus::Hero,
                     last_action: "—".into(),
                     hole_cards: Some([card(Ace, Spades), card(King, Hearts)]),
+                    is_to_act: true,
                 },
                 Seat {
                     name: "maple".into(),
@@ -121,6 +127,7 @@ impl GameState {
                     status: SeatStatus::Folded,
                     last_action: "fold".into(),
                     hole_cards: None,
+                    is_to_act: false,
                 },
                 Seat {
                     name: "rook".into(),
@@ -129,6 +136,7 @@ impl GameState {
                     status: SeatStatus::Bet,
                     last_action: "bet 600".into(),
                     hole_cards: Some([card(King, Clubs), card(Queen, Diamonds)]),
+                    is_to_act: false,
                 },
             ],
             phase: Phase {
