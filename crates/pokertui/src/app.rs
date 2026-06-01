@@ -53,7 +53,7 @@ impl Controller {
 
 /// Visible delay before a bot acts, so a human can follow the table at a natural
 /// pace rather than seeing the bots blink through their turns.
-const BOT_ACTION_DELAY: Duration = Duration::from_millis(500);
+const BOT_ACTION_DELAY: Duration = Duration::from_millis(700);
 
 /// The hero seat the UI renders cards for: the first human-controlled seat. An
 /// all-bot table (allowed, e.g. a demo that just watches the bots play) has no
@@ -77,8 +77,12 @@ pub struct App {
     /// it to drive bot turns; `handle_key` reads it to ignore input on bot turns.
     seats: Vec<Controller>,
     /// Cross-hand opponent fold-frequency model fed to the bot decision engine.
-    /// Populated from completed hands in a later step; priors carry it until then.
+    /// Folded the completed hand's action log into on completion (see
+    /// `record_if_complete`); priors carry it until enough hands are seen.
     model: OpponentModel,
+    /// Whether the current hand's log has already been recorded into `model`,
+    /// so a completed hand is folded in exactly once. Reset when a hand is dealt.
+    hand_recorded: bool,
     /// How long a bot waits before acting, so a human can follow the table.
     bot_delay: Duration,
     /// Earliest instant the bot whose turn it is may act. Armed when a bot turn
@@ -114,6 +118,7 @@ impl App {
             engine: Some(engine),
             names,
             model,
+            hand_recorded: false,
             bot_delay: BOT_ACTION_DELAY,
             next_bot_action: None,
             seats,
@@ -258,6 +263,7 @@ impl App {
             let next = self.engine().next_hand(Self::fresh_seed());
             self.engine = Some(next);
             self.raise_to = None;
+            self.hand_recorded = false;
             return true;
         }
         let Some(to_act) = self.engine().to_act else {
@@ -319,6 +325,7 @@ impl App {
             Ok(next) => {
                 self.engine = Some(next);
                 self.raise_to = None;
+                self.record_if_complete();
                 true
             }
             Err((restored, _)) => {
@@ -385,10 +392,23 @@ impl App {
             Ok(next) => {
                 self.engine = Some(next);
                 self.raise_to = None;
+                self.record_if_complete();
             }
             Err((restored, _)) => {
                 self.engine = Some(restored);
             }
+        }
+    }
+
+    /// When the hand has just completed, fold its action log into the opponent
+    /// model — exactly once, before the next hand is dealt — so the bots' fold
+    /// equity estimates learn from how each seat actually played. A no-op until
+    /// the hand reaches `Complete` and while it stays there after recording.
+    fn record_if_complete(&mut self) {
+        let engine = self.engine.as_ref().expect("engine present between turns");
+        if engine.phase == Phase::Complete && !self.hand_recorded {
+            self.model.record_hand(&engine.log);
+            self.hand_recorded = true;
         }
     }
 
@@ -643,6 +663,62 @@ mod tests {
             app.engine().phase,
             Phase::Complete,
             "an all-bot table must play a full hand to completion without stalling"
+        );
+    }
+
+    #[test]
+    fn completing_a_hand_records_folds_into_the_model() {
+        let mut app = App::new_demo_hand();
+        // Nothing observed yet: the human (UTG, seat 3) has not acted.
+        assert_eq!(app.model.observed_fold_rate(PlayerId(3)), None);
+
+        fold_to_completion(&mut app);
+        assert_eq!(app.engine().phase, Phase::Complete);
+
+        // The human folded UTG facing the big blind — a fold to a bet.
+        assert_eq!(
+            app.model.observed_fold_rate(PlayerId(3)),
+            Some(1.0),
+            "the human's fold to the BB is folded into the model"
+        );
+    }
+
+    #[test]
+    fn a_completed_hand_is_recorded_exactly_once() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+
+        // Seat 3 faced exactly one bet and folded it. With a zero prior and a
+        // pot-sized bet (scaling 1.0), p_fold = folded/(K + faced) = 1/(4+1) =
+        // 0.2. A double-record would make it 2/(4+2) = 0.333…, so this pins the
+        // recording to a single pass over the log.
+        let p = app.model.p_fold(PlayerId(3), 100, 100, 0.0);
+        assert!(
+            (p - 0.2).abs() < 1e-9,
+            "expected a single record (0.2), got {p}"
+        );
+
+        // Idling at `Complete` (extra steps/redraws) must not re-record.
+        app.step();
+        app.step();
+        let p_again = app.model.p_fold(PlayerId(3), 100, 100, 0.0);
+        assert!((p_again - p).abs() < 1e-9, "completion must not re-record");
+    }
+
+    #[test]
+    fn the_model_persists_across_hands() {
+        let mut app = App::new_demo_hand();
+        fold_to_completion(&mut app);
+        assert_eq!(app.model.observed_fold_rate(PlayerId(3)), Some(1.0));
+
+        // Deal the next hand; the accumulated observations must carry over.
+        let dealt = app.handle_key(KeyCode::Char(' '));
+        assert!(dealt, "a key at COMPLETE deals the next hand");
+        assert_eq!(app.engine().phase, Phase::Preflop);
+        assert_eq!(
+            app.model.observed_fold_rate(PlayerId(3)),
+            Some(1.0),
+            "the opponent model is cross-hand, not reset between hands"
         );
     }
 
