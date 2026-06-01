@@ -143,8 +143,8 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
 }
 
 fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
-    // Board (4 tall) sits below pot pill (1 tall) with a 1-row gap.
-    let needed_h: u16 = 1 + 1 + CARD_H;
+    // Board sits below pot pill (1 tall) with a 1-row gap.
+    let needed_h: u16 = 1 + 1 + BOARD_CARD_H;
     let block_h = needed_h.min(area.height);
     let block = Rect {
         x: area.x,
@@ -155,7 +155,7 @@ fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
     let [pot_row, _, board_row] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(CARD_H),
+        Constraint::Length(BOARD_CARD_H),
     ])
     .areas(block);
 
@@ -232,6 +232,10 @@ fn render_rail(frame: &mut Frame, area: Rect, state: &GameState) {
 const CARD_W: u16 = 5;
 const CARD_H: u16 = 4;
 const POD_W: u16 = CARD_W * 2; // 10
+
+// Community cards in the centre are drawn larger than the seat cards.
+const BOARD_CARD_W: u16 = 7;
+const BOARD_CARD_H: u16 = 5;
 
 fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     let hero = seat.is_hero();
@@ -318,17 +322,17 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
 
 fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
     let slots = 5u16;
-    let gap = 1u16;
-    let total_w = slots * CARD_W + (slots - 1) * gap;
-    let strip = centered_rect(area, total_w, CARD_H);
+    let gap = 2u16;
+    let total_w = slots * BOARD_CARD_W + (slots - 1) * gap;
+    let strip = centered_rect(area, total_w, BOARD_CARD_H);
 
     let mut x = strip.x;
     for i in 0..slots as usize {
         let slot = Rect {
             x,
             y: strip.y,
-            width: CARD_W,
-            height: CARD_H,
+            width: BOARD_CARD_W,
+            height: BOARD_CARD_H,
         };
         match state.phase.board.get(i) {
             Some(&card) if i < state.phase.dealt => {
@@ -338,7 +342,7 @@ fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
             }
             _ => render_card_slot(frame, slot),
         }
-        x += CARD_W + gap;
+        x += BOARD_CARD_W + gap;
     }
 }
 
@@ -672,7 +676,7 @@ impl Widget for CardFace {
 
         let color = suit_color(self.card.suit());
         let rank = rank_label(self.card.rank());
-        // Inner is 3×2: rank top-left, suit at (1,1) of inner.
+        // Rank always sits in the top-left corner.
         write_str(
             buf,
             inner.x,
@@ -680,8 +684,16 @@ impl Widget for CardFace {
             rank,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         );
-        let suit_x = inner.x + 1;
-        let suit_y = inner.y + 1;
+        // Suit pip: tucked diagonally under the rank on the compact seat
+        // cards (3×2 inner), or centred as a big pip on the larger board cards.
+        let (suit_x, suit_y) = if inner.height >= 3 {
+            (
+                inner.x + inner.width.saturating_sub(1) / 2,
+                inner.y + inner.height / 2,
+            )
+        } else {
+            (inner.x + 1, inner.y + 1)
+        };
         let suit = suit_glyph(self.card.suit());
         write_str(
             buf,
