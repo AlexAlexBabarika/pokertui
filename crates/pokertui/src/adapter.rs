@@ -116,6 +116,8 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
             engine.contributed.iter().sum()
         },
         to_call: to_call_for_hero(engine, names.hero),
+        // Filled in by `App::view`, which owns the live raise selection.
+        raise_to: None,
         equity: 0,
         odds_pct: 0.0,
         rank,

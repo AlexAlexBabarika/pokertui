@@ -396,8 +396,6 @@ fn render_pot_pill(frame: &mut Frame, area: Rect, state: &GameState) {
 fn render_action_bar(frame: &mut Frame, area: Rect, state: &GameState) {
     let to_call = state.phase.to_call;
     let stack = state.hero().map(|h| h.stack).unwrap_or(0);
-    let raise_to = state.phase.pot.max(1_800);
-
     let buttons = [
         ('F', "FOLD", String::new(), pal::RED),
         (
@@ -410,7 +408,16 @@ fn render_action_bar(frame: &mut Frame, area: Rect, state: &GameState) {
             },
             pal::LIME,
         ),
-        ('R', "RAISE", fmt_int(raise_to), pal::AMBER),
+        (
+            'R',
+            "RAISE",
+            state
+                .phase
+                .raise_to
+                .map(fmt_int)
+                .unwrap_or_else(|| "—".into()),
+            pal::AMBER,
+        ),
         ('A', "ALL-IN", fmt_int(stack), Color::Reset),
     ];
 
@@ -988,5 +995,19 @@ mod tests {
     fn too_small_terminal_shows_notice() {
         let frame = dump(60, 20);
         assert!(frame.contains("terminal too small"), "no notice rendered");
+    }
+
+    #[test]
+    fn raise_box_shows_selected_amount_not_placeholder() {
+        // GameState::demo() sets phase.raise_to = Some(700).
+        let frame = dump(120, 40);
+        assert!(
+            frame.contains("700"),
+            "RAISE box should show the selected amount"
+        );
+        assert!(
+            !frame.contains("1,800"),
+            "stale 1,800 placeholder must be gone"
+        );
     }
 }
