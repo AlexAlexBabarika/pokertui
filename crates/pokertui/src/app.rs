@@ -14,12 +14,17 @@ pub struct App {
 
 impl App {
     pub fn new_demo_hand() -> Self {
+        // Seed from the wall clock so each launch deals a different hand.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xC0FFEE);
         let cfg = HandConfig {
             num_players: 6,
             small_blind: 50,
             big_blind: 100,
             dealer: PlayerId(0),
-            seed: 0xC0FFEE,
+            seed,
         };
         let engine = HandState::new_hand(cfg, vec![10_000; 6]);
         let names = NameRegistry::demo_six();
