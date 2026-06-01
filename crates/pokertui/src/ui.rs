@@ -232,7 +232,7 @@ fn render_rail(frame: &mut Frame, area: Rect, state: &GameState) {
 
     let inner = inset(inner, 1, 1);
     // Stack: HAND (5) · gap (1) · EQUITY (5) · gap (1) · LOG (flex) · gap (1) · CHAT (6)
-    let hand_h: u16 = 5;
+    let hand_h: u16 = 4;
     let eq_h: u16 = 5;
     let chat_h: u16 = 6;
     let gap: u16 = 1;
