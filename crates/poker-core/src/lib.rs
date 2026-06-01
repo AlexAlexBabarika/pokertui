@@ -1,5 +1,6 @@
 //! Pure poker rules kernel — no UI, no async, no I/O.
 
+pub mod bot;
 pub mod equity;
 pub mod holdem;
 

@@ -159,7 +159,11 @@ mod tests {
         // is exact regardless of the opponent's random holding.
         let board = h("2h 7h 9h Kd 3c");
         let eq = hero_equity(hole("Ah Qh"), &board, 1, 5_000, 3);
-        assert!(eq.pct() > 99.0, "nut flush on the river ≈ 100%, got {:.1}%", eq.pct());
+        assert!(
+            eq.pct() > 99.0,
+            "nut flush on the river ≈ 100%, got {:.1}%",
+            eq.pct()
+        );
     }
 
     #[test]
