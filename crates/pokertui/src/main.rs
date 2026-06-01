@@ -68,5 +68,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
                 }
             }
         }
+
+        // Drive the bot seats; paced internally so a human can follow along.
+        app.step();
     }
 }

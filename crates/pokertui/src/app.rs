@@ -1,8 +1,9 @@
 use std::hash::{Hash, Hasher};
+use std::time::{Duration, Instant};
 
 use crossterm::event::KeyCode;
 use poker_core::Card;
-use poker_core::bot::BotProfile;
+use poker_core::bot::{BotProfile, OpponentModel, decide};
 use poker_core::equity::hero_equity;
 use poker_core::holdem::{Action, HandConfig, HandState, Phase, PlayerId, apply, legal_actions};
 
@@ -44,7 +45,15 @@ impl Controller {
     pub fn is_human(self) -> bool {
         matches!(self, Controller::Human)
     }
+
+    pub fn is_bot(self) -> bool {
+        matches!(self, Controller::Bot(_))
+    }
 }
+
+/// Visible delay before a bot acts, so a human can follow the table at a natural
+/// pace rather than seeing the bots blink through their turns.
+const BOT_ACTION_DELAY: Duration = Duration::from_millis(500);
 
 /// The hero seat the UI renders cards for: the first human-controlled seat. An
 /// all-bot table (allowed, e.g. a demo that just watches the bots play) has no
@@ -64,10 +73,17 @@ pub struct App {
     engine: Option<HandState>,
     pub names: NameRegistry,
     /// Who drives each seat, indexed by `PlayerId`. The hero is the first
-    /// `Human` seat; the rest are bots (until `Remote` is added). Read by
-    /// `App::step` (added next) to drive bot turns and to gate human input.
-    #[allow(dead_code)]
+    /// `Human` seat; the rest are bots (until `Remote` is added). `step` reads
+    /// it to drive bot turns; `handle_key` reads it to ignore input on bot turns.
     seats: Vec<Controller>,
+    /// Cross-hand opponent fold-frequency model fed to the bot decision engine.
+    /// Populated from completed hands in a later step; priors carry it until then.
+    model: OpponentModel,
+    /// How long a bot waits before acting, so a human can follow the table.
+    bot_delay: Duration,
+    /// Earliest instant the bot whose turn it is may act. Armed when a bot turn
+    /// is first seen and cleared once it acts (or the turn passes to a human).
+    next_bot_action: Option<Instant>,
     /// Currently selected raise/bet to-level. `None` = untouched → use min.
     /// Reset to `None` after every committed action.
     raise_to: Option<u64>,
@@ -93,9 +109,13 @@ impl App {
         let mut names = NameRegistry::demo_six();
         // Keep the rendered hero consistent with the controller layout.
         names.hero = hero_seat(&seats);
+        let model = OpponentModel::new(seats.len());
         Self {
             engine: Some(engine),
             names,
+            model,
+            bot_delay: BOT_ACTION_DELAY,
+            next_bot_action: None,
             seats,
             raise_to: None,
             game_over: false,
@@ -240,7 +260,11 @@ impl App {
             self.raise_to = None;
             return true;
         }
-        if self.engine().to_act.is_none() {
+        let Some(to_act) = self.engine().to_act else {
+            return false;
+        };
+        // Bots act through `step`, not the keyboard — ignore input on their turn.
+        if self.seats[to_act.0].is_bot() {
             return false;
         }
 
@@ -261,10 +285,7 @@ impl App {
         }
 
         let engine = self.engine();
-        // Only the hero (the human at the keyboard for pass-and-play) acts via keys.
-        // In hot-seat, every active player IS the hero from their own perspective —
-        // we accept input for whoever is to_act. This makes pass-and-play work.
-
+        // Reaching here means a human seat is to act; map the key to its action.
         let action = match key {
             KeyCode::Char('f') | KeyCode::Char('F') => Some(Action::Fold),
             KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -305,6 +326,79 @@ impl App {
                 false
             }
         }
+    }
+
+    /// Advance the table by at most one bot action. Drives whichever seat is to
+    /// act if it is a bot and its pacing delay has elapsed; a human turn, no
+    /// actor, or a finished hand is a no-op. Returns true if a bot acted.
+    ///
+    /// Called once per tick by the main loop after key handling.
+    pub fn step(&mut self) -> bool {
+        self.step_at(Instant::now())
+    }
+
+    /// `step` with an injectable clock, so pacing is testable without waiting.
+    fn step_at(&mut self, now: Instant) -> bool {
+        let (to_act, complete) = {
+            let e = self.engine();
+            (e.to_act, e.phase == Phase::Complete)
+        };
+        // Nothing to drive, or it's the human's turn — keys handle that.
+        let Some(to_act) = to_act else {
+            self.next_bot_action = None;
+            return false;
+        };
+        if complete || self.seats[to_act.0].is_human() {
+            self.next_bot_action = None;
+            return false;
+        }
+
+        // A bot is to act: arm the pacing timer the first time we see its turn,
+        // then act once the delay has elapsed. At most one action per call.
+        match self.next_bot_action {
+            None => {
+                self.next_bot_action = Some(now + self.bot_delay);
+                false
+            }
+            Some(at) if now >= at => {
+                self.act_bot(to_act);
+                self.next_bot_action = None;
+                true
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// Compute a bot's action with the decision engine and apply it, using the
+    /// same take/apply/restore pattern as `handle_key`. An illegal action (which
+    /// should be unreachable for a legal `decide`) restores state unchanged.
+    fn act_bot(&mut self, seat: PlayerId) {
+        let Controller::Bot(profile) = self.seats[seat.0] else {
+            return;
+        };
+        let engine = self.engine();
+        let rng_seed = Self::bot_seed(engine, seat);
+        let action = decide(engine, seat, &profile, &self.model, rng_seed);
+
+        let taken = self.engine.take().expect("engine present between turns");
+        match apply(taken, action) {
+            Ok(next) => {
+                self.engine = Some(next);
+                self.raise_to = None;
+            }
+            Err((restored, _)) => {
+                self.engine = Some(restored);
+            }
+        }
+    }
+
+    /// Deterministic per-decision seed from `(hand seed, seat, log length)`, so a
+    /// given spot always plays the same way — matching the codebase's seeded
+    /// ethos and keeping bot play reproducible.
+    fn bot_seed(engine: &HandState, seat: PlayerId) -> u64 {
+        engine.config.seed
+            ^ (seat.0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (engine.log.len() as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)
     }
 }
 
@@ -398,9 +492,7 @@ mod tests {
     #[test]
     fn equity_is_zero_at_showdown() {
         let mut app = App::new_demo_hand();
-        while app.engine().phase != Phase::Complete {
-            app.handle_key(KeyCode::Char('f'));
-        }
+        fold_to_completion(&mut app);
         assert_eq!(
             app.view().phase.equity,
             0,
@@ -478,14 +570,101 @@ mod tests {
         assert_eq!(app.view().phase.raise_to, Some(min));
     }
 
-    fn fold_to_completion(app: &mut App) {
-        // Fold every actor in turn until one player remains and the hand ends.
-        while app.engine().phase != Phase::Complete {
-            assert!(
-                app.handle_key(KeyCode::Char('f')),
-                "fold should be accepted"
-            );
+    #[test]
+    fn step_is_a_no_op_on_a_human_turn() {
+        let mut app = App::new_demo_hand();
+        // Seat 3 (the human) is UTG, first to act preflop.
+        let hero = app.engine().to_act.unwrap();
+        assert!(app.seats[hero.0].is_human());
+        let log_before = app.engine().log.len();
+
+        assert!(!app.step(), "step must not act on a human turn");
+        assert_eq!(app.engine().to_act, Some(hero), "still the human's turn");
+        assert_eq!(app.engine().log.len(), log_before, "no action applied");
+    }
+
+    #[test]
+    fn step_paces_a_bot_action_until_the_delay_elapses() {
+        let mut app = App::new_demo_hand();
+        app.handle_key(KeyCode::Char('f')); // human folds → a bot is next to act
+        let bot = app.engine().to_act.unwrap();
+        assert!(app.seats[bot.0].is_bot());
+        let log_before = app.engine().log.len();
+
+        let t0 = Instant::now();
+        // First sighting only arms the pacing timer.
+        assert!(!app.step_at(t0));
+        assert_eq!(
+            app.engine().log.len(),
+            log_before,
+            "bot waits out the delay"
+        );
+        // Still inside the delay window.
+        assert!(!app.step_at(t0 + Duration::from_millis(100)));
+        assert_eq!(app.engine().log.len(), log_before);
+        // Past the delay: the bot acts.
+        assert!(app.step_at(t0 + BOT_ACTION_DELAY + Duration::from_millis(1)));
+        assert!(
+            app.engine().log.len() > log_before,
+            "the bot acted once the delay elapsed"
+        );
+    }
+
+    #[test]
+    fn handle_key_is_ignored_on_a_bot_turn() {
+        let mut app = App::new_demo_hand();
+        app.handle_key(KeyCode::Char('f')); // human folds → a bot is next to act
+        let bot = app.engine().to_act.unwrap();
+        assert!(app.seats[bot.0].is_bot());
+        let log_before = app.engine().log.len();
+
+        let consumed = app.handle_key(KeyCode::Char('f'));
+        assert!(!consumed, "keys do nothing while a bot is to act");
+        assert_eq!(app.engine().to_act, Some(bot), "still the bot's turn");
+        assert_eq!(app.engine().log.len(), log_before, "no action applied");
+    }
+
+    #[test]
+    fn an_all_bot_table_plays_a_full_hand_to_completion() {
+        let mut app = App::new_demo_hand();
+        // Replace every seat with a bot; the step loop must play unaided.
+        app.seats = vec![Controller::Bot(BotProfile::balanced()); 6];
+        app.names.hero = hero_seat(&app.seats);
+
+        let mut clock = Instant::now();
+        for _ in 0..10_000 {
+            if app.engine().phase == Phase::Complete {
+                break;
+            }
+            clock += Duration::from_secs(1);
+            app.step_at(clock);
         }
+        assert_eq!(
+            app.engine().phase,
+            Phase::Complete,
+            "an all-bot table must play a full hand to completion without stalling"
+        );
+    }
+
+    fn fold_to_completion(app: &mut App) {
+        // Drive the hand to completion: the human folds at every turn, the bots
+        // play their own lines through the paced step loop. Either way the hand
+        // reaches `Complete`.
+        let mut clock = Instant::now();
+        for _ in 0..10_000 {
+            match app.engine().to_act {
+                _ if app.engine().phase == Phase::Complete => return,
+                Some(p) if app.seats[p.0].is_human() => {
+                    app.handle_key(KeyCode::Char('f'));
+                }
+                Some(_) => {
+                    clock += Duration::from_secs(1);
+                    app.step_at(clock);
+                }
+                None => return,
+            }
+        }
+        panic!("hand did not complete");
     }
 
     #[test]
