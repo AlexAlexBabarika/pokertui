@@ -151,13 +151,7 @@ impl App {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
         let seed = hasher.finish();
-        let eq = hero_equity(
-            key.hole,
-            &key.board,
-            key.live_opponents,
-            EQUITY_ITERS,
-            seed,
-        );
+        let eq = hero_equity(key.hole, &key.board, key.live_opponents, EQUITY_ITERS, seed);
         eq.pct().round() as u8
     }
 
