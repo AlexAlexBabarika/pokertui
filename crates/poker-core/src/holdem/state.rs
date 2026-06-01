@@ -67,11 +67,22 @@ impl HandState {
         );
 
         let n = config.num_players;
+
+        // Seats with no chips sit out: they start folded, post no blind, are
+        // dealt no role, and never act. The hand's table size for blind/position
+        // purposes is the number of *funded* seats, not the seat count.
+        let funded: Vec<usize> = (0..n).filter(|&i| stacks[i] > 0).collect();
+        assert!(funded.len() >= 2, "need at least 2 funded seats");
+        assert!(stacks[config.dealer.0] > 0, "dealer must be a funded seat");
+        let folded: Vec<bool> = (0..n).map(|i| stacks[i] == 0).collect();
+
         let mut deck = Deck::new();
         deck.shuffle_with_seed(config.seed);
         let mut deck: Vec<Card> = deck.cards().to_vec();
 
         // Deal 2 hole cards per player, alternating (real poker dealing order).
+        // Sitting-out seats are folded, so their cards are mucked and never seen,
+        // but every seat keeps a slot so per-seat vectors stay length `n`.
         let mut hole: Vec<[Card; 2]> = Vec::with_capacity(n);
         for _ in 0..n {
             hole.push([
@@ -83,15 +94,26 @@ impl HandState {
             slot[1] = deck.remove(0);
         }
 
-        // Blind positions.
-        // Heads-up: dealer is SB, the other is BB, dealer acts first preflop.
-        // 3+: SB = dealer+1, BB = dealer+2, UTG = dealer+3.
-        let (sb_idx, bb_idx, first_to_act) = if n == 2 {
-            (config.dealer.0, (config.dealer.0 + 1) % n, config.dealer.0)
+        // Next funded seat clockwise from `from` (excluding `from`).
+        let next_funded = |from: usize| -> usize {
+            let mut c = (from + 1) % n;
+            while stacks[c] == 0 {
+                c = (c + 1) % n;
+            }
+            c
+        };
+
+        // Blind positions, walking only funded seats.
+        // Heads-up (2 funded): dealer is SB, the other is BB, dealer acts first.
+        // 3+ funded: SB = next funded after dealer, BB = next after SB, UTG next.
+        let dealer = config.dealer.0;
+        let (sb_idx, bb_idx, first_to_act) = if funded.len() == 2 {
+            let other = next_funded(dealer);
+            (dealer, other, dealer)
         } else {
-            let sb = (config.dealer.0 + 1) % n;
-            let bb = (config.dealer.0 + 2) % n;
-            let utg = (config.dealer.0 + 3) % n;
+            let sb = next_funded(dealer);
+            let bb = next_funded(sb);
+            let utg = next_funded(bb);
             (sb, bb, utg)
         };
 
@@ -143,7 +165,7 @@ impl HandState {
             stacks,
             contributed,
             round_bet,
-            folded: vec![false; n],
+            folded,
             all_in,
             acted_this_round,
             to_act: Some(PlayerId(first_to_act)),
@@ -159,6 +181,30 @@ impl HandState {
 
     pub(crate) fn all_have_acted_this_round(&self, actionable: &[usize]) -> bool {
         actionable.iter().all(|&i| self.acted_this_round[i])
+    }
+
+    /// Number of seats that still have chips. The game is over once this drops
+    /// below 2 — only one player can fund a hand.
+    pub fn funded_seats(&self) -> usize {
+        self.stacks.iter().filter(|&&s| s > 0).count()
+    }
+
+    /// Deal the next hand: carry every seat's stack forward, move the dealer
+    /// button to the next funded seat, and shuffle with `seed`. Seats that ran
+    /// out of chips sit out (start folded). Requires at least 2 funded seats.
+    pub fn next_hand(&self, seed: u64) -> Self {
+        let n = self.config.num_players;
+        // Advance the button to the next funded seat clockwise.
+        let mut dealer = (self.config.dealer.0 + 1) % n;
+        while self.stacks[dealer] == 0 {
+            dealer = (dealer + 1) % n;
+        }
+        let config = HandConfig {
+            dealer: PlayerId(dealer),
+            seed,
+            ..self.config
+        };
+        HandState::new_hand(config, self.stacks.clone())
     }
 }
 
@@ -226,5 +272,78 @@ mod tests {
         let s = HandState::new_hand(cfg(6), stacks);
         assert_eq!(s.contributed[1], 30, "SB caps at stack");
         assert!(s.all_in[1]);
+    }
+
+    #[test]
+    fn busted_seat_sits_out_folded_and_posts_nothing() {
+        // Dealer 0; seat 1 (the usual SB) is busted. Blinds must skip it.
+        let mut stacks = vec![10_000u64; 6];
+        stacks[1] = 0;
+        let s = HandState::new_hand(cfg(6), stacks);
+        assert!(s.folded[1], "busted seat starts folded");
+        assert!(!s.all_in[1], "busted seat is not all-in");
+        assert_eq!(s.contributed[1], 0, "busted seat posts no blind");
+        assert_eq!(s.stacks[1], 0);
+        // SB rolls to the next funded seat (2), BB to (3), UTG to (4).
+        assert_eq!(s.contributed[2], 50, "SB skips busted seat 1");
+        assert_eq!(s.contributed[3], 100, "BB skips busted seat 1");
+        assert_eq!(s.to_act, Some(PlayerId(4)), "UTG is first funded after BB");
+        assert_ne!(s.to_act, Some(PlayerId(1)), "busted seat never acts");
+    }
+
+    #[test]
+    fn two_funded_seats_play_heads_up_rules() {
+        // Only seats 0 and 3 are funded → heads-up: dealer (0) is SB and acts
+        // first preflop, the other funded seat (3) is BB.
+        let stacks = vec![10_000, 0, 0, 10_000, 0, 0];
+        let s = HandState::new_hand(cfg(6), stacks);
+        assert_eq!(s.contributed[0], 50, "dealer is SB heads-up");
+        assert_eq!(s.contributed[3], 100, "other funded seat is BB");
+        assert_eq!(s.to_act, Some(PlayerId(0)), "dealer/SB acts first heads-up");
+        for &busted in &[1usize, 2, 4, 5] {
+            assert!(s.folded[busted], "seat {busted} busted and folded");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "at least 2 funded")]
+    fn fewer_than_two_funded_seats_panics() {
+        let stacks = vec![0, 0, 10_000, 0, 0, 0];
+        let _ = HandState::new_hand(cfg(6), stacks);
+    }
+
+    #[test]
+    fn funded_seats_counts_nonzero_stacks() {
+        let stacks = vec![10_000, 0, 500, 0, 0, 200];
+        let s = HandState::new_hand(cfg(6), stacks);
+        assert_eq!(s.funded_seats(), 3);
+    }
+
+    #[test]
+    fn next_hand_carries_stacks_and_rotates_dealer() {
+        let s = HandState::new_hand(cfg(6), vec![10_000; 6]);
+        // Pretend the hand ended with uneven stacks.
+        let mut ended = s;
+        ended.stacks = vec![5_000, 12_000, 9_000, 11_000, 8_000, 15_000];
+        let next = ended.next_hand(0xABCDEF);
+        assert_eq!(next.config.dealer, PlayerId(1), "button moves one seat");
+        // Stacks carry over, minus the blinds the new SB/BB just posted.
+        // New dealer 1 → SB = 2 (9_000-50), BB = 3 (11_000-100).
+        assert_eq!(next.stacks[0], 5_000);
+        assert_eq!(next.stacks[2], 8_950, "new SB posted 50");
+        assert_eq!(next.stacks[3], 10_900, "new BB posted 100");
+        assert_eq!(next.config.seed, 0xABCDEF);
+        assert_eq!(next.phase, Phase::Preflop);
+    }
+
+    #[test]
+    fn next_hand_skips_busted_seats_for_the_button() {
+        let s = HandState::new_hand(cfg(6), vec![10_000; 6]);
+        let mut ended = s;
+        // Seats 1 and 2 are busted; button is currently 0, so it must jump to 3.
+        ended.stacks = vec![5_000, 0, 0, 11_000, 8_000, 15_000];
+        let next = ended.next_hand(7);
+        assert_eq!(next.config.dealer, PlayerId(3), "button skips busted seats");
+        assert!(next.folded[1] && next.folded[2], "busted seats sit out");
     }
 }

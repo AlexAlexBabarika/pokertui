@@ -52,6 +52,11 @@ pub fn render(frame: &mut Frame, state: &GameState) {
     render_rail(frame, rail_area, state);
 }
 
+/// Folded and busted players are both out of the hand and share the roster.
+fn is_sidelined(status: SeatStatus) -> bool {
+    matches!(status, SeatStatus::Folded | SeatStatus::Busted)
+}
+
 /// The hero's made-hand cards for the current street, or empty if no hero /
 /// no hole cards yet.
 fn hero_made_cards(state: &GameState) -> Vec<Card> {
@@ -124,15 +129,16 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
     let active: Vec<&Seat> = state
         .players
         .iter()
-        .filter(|p| !p.is_hero() && p.status != SeatStatus::Folded)
+        .filter(|p| !p.is_hero() && !is_sidelined(p.status))
         .collect();
+    // Folded and busted players both drop out of the hand and share the roster.
     let folded: Vec<&Seat> = state
         .players
         .iter()
-        .filter(|p| !p.is_hero() && p.status == SeatStatus::Folded)
+        .filter(|p| !p.is_hero() && is_sidelined(p.status))
         .collect();
 
-    // Reserve a roster column only when someone has folded; otherwise pods
+    // Reserve a roster column only when someone is sidelined; otherwise pods
     // take the whole strip.
     let roster_w: u16 = if folded.is_empty() { 0 } else { 18 };
     let [active_col, folded_col] =
@@ -162,11 +168,16 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
         if (i as u16) >= folded_inner.height {
             break;
         }
+        let tag = if p.status == SeatStatus::Busted {
+            "  busted"
+        } else {
+            "  folded"
+        };
         let line = Line::from(vec![
             Span::styled(p.name.as_str(), Style::default().fg(pal::DIM)),
             Span::styled(" · ", Style::default().fg(pal::DIM)),
             Span::styled(p.pos.as_str(), Style::default().fg(pal::DIM)),
-            Span::styled("  folded", Style::default().fg(pal::DIM)),
+            Span::styled(tag, Style::default().fg(pal::DIM)),
         ]);
         put_line(frame, folded_inner.x, folded_inner.y + i as u16, line);
     }
@@ -189,8 +200,20 @@ fn render_center(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[
     ])
     .areas(block);
 
-    render_pot_pill(frame, pot_row, state);
+    // A live hand shows the pot pill; at hand's end the banner takes its place.
+    match &state.notice {
+        Some(text) => render_notice(frame, pot_row, text),
+        None => render_pot_pill(frame, pot_row, state),
+    }
     render_board(frame, board_row, state, highlight);
+}
+
+fn render_notice(frame: &mut Frame, area: Rect, text: &str) {
+    let line = Line::from(Span::styled(
+        text,
+        Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
+    ));
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
 fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
@@ -340,7 +363,7 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool, h
     };
     let tag_color = match (hero, seat.status) {
         (true, _) => pal::LIME,
-        (_, SeatStatus::Folded) => pal::DIM,
+        (_, SeatStatus::Folded | SeatStatus::Busted) => pal::DIM,
         _ => verb_color(&seat.last_action),
     };
     let action_line = Line::from(Span::styled(
@@ -396,8 +419,6 @@ fn render_pot_pill(frame: &mut Frame, area: Rect, state: &GameState) {
 fn render_action_bar(frame: &mut Frame, area: Rect, state: &GameState) {
     let to_call = state.phase.to_call;
     let stack = state.hero().map(|h| h.stack).unwrap_or(0);
-    let raise_to = state.phase.pot.max(1_800);
-
     let buttons = [
         ('F', "FOLD", String::new(), pal::RED),
         (
@@ -410,7 +431,16 @@ fn render_action_bar(frame: &mut Frame, area: Rect, state: &GameState) {
             },
             pal::LIME,
         ),
-        ('R', "RAISE", fmt_int(raise_to), pal::AMBER),
+        (
+            'R',
+            "RAISE",
+            state
+                .phase
+                .raise_to
+                .map(fmt_int)
+                .unwrap_or_else(|| "—".into()),
+            pal::AMBER,
+        ),
         ('A', "ALL-IN", fmt_int(stack), Color::Reset),
     ];
 
@@ -988,5 +1018,47 @@ mod tests {
     fn too_small_terminal_shows_notice() {
         let frame = dump(60, 20);
         assert!(frame.contains("terminal too small"), "no notice rendered");
+    }
+
+    #[test]
+    fn end_of_hand_notice_banner_is_rendered() {
+        let mut state = GameState::demo();
+        state.notice = Some("hand complete · press any key for the next hand".into());
+        let frame = dump_state(&state, 120, 40);
+        assert!(
+            frame.contains("press any key"),
+            "end-of-hand notice banner not shown"
+        );
+    }
+
+    #[test]
+    fn busted_player_is_listed_as_busted() {
+        let mut state = GameState::demo();
+        for p in &mut state.players {
+            if p.name == "rook" {
+                p.status = SeatStatus::Busted;
+                p.stack = 0;
+            }
+        }
+        let frame = dump_state(&state, 120, 40);
+        let strip: String = frame.lines().take(9).collect::<Vec<_>>().join("\n");
+        assert!(
+            strip.contains("busted"),
+            "a busted player should be labeled 'busted' in the roster"
+        );
+    }
+
+    #[test]
+    fn raise_box_shows_selected_amount_not_placeholder() {
+        // GameState::demo() sets phase.raise_to = Some(700).
+        let frame = dump(120, 40);
+        assert!(
+            frame.contains("700"),
+            "RAISE box should show the selected amount"
+        );
+        assert!(
+            !frame.contains("1,800"),
+            "stale 1,800 placeholder must be gone"
+        );
     }
 }

@@ -6,6 +6,8 @@ pub enum SeatStatus {
     Active,
     Bet,
     Folded,
+    /// Out of chips — sitting out the hand, shown alongside folded players.
+    Busted,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +57,9 @@ pub struct Phase {
     pub dealt: usize,
     pub pot: u64,
     pub to_call: u64,
+    /// Amount the RAISE button will commit (the player's selected raise/bet
+    /// to-level). `None` when no legal raise/bet exists for the player to act.
+    pub raise_to: Option<u64>,
     pub equity: u8,    // 0..=100
     pub odds_pct: f32, // e.g. 24.5
     pub rank: String,
@@ -67,6 +72,9 @@ pub struct GameState {
     pub phase: Phase,
     pub log: Vec<LogEntry>,
     pub chat: Vec<ChatLine>,
+    /// A transient banner shown over the table: the "press a key" prompt at the
+    /// end of a hand, or the game-over message. `None` during live play.
+    pub notice: Option<String>,
 }
 
 impl GameState {
@@ -149,6 +157,7 @@ impl GameState {
                 dealt: 4,
                 pot: 1_850,
                 to_call: 600,
+                raise_to: Some(700),
                 equity: 38,
                 odds_pct: 24.5,
                 rank: "Two Pair".into(),
@@ -229,6 +238,7 @@ impl GameState {
                     msg: "tank-calling…".into(),
                 },
             ],
+            notice: None,
         }
     }
 }

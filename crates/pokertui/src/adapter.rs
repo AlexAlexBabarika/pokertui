@@ -57,6 +57,10 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         let pos = position_label(offset, n);
         let status = if PlayerId(i) == names.hero {
             SeatStatus::Hero
+        } else if engine.folded[i] && engine.stacks[i] == 0 {
+            // A normally-folded player always keeps chips (you cannot fold while
+            // all-in), so folded-and-broke uniquely marks a sat-out busted seat.
+            SeatStatus::Busted
         } else if engine.folded[i] {
             SeatStatus::Folded
         } else if Some(PlayerId(i)) == engine.last_aggressor {
@@ -103,21 +107,27 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         .unwrap_or("—")
         .into();
 
+    // Once the hand is complete the pot has been paid into the winners' stacks,
+    // so the live pot is empty. `contributed` is never reset, so showing its sum
+    // at `Complete` would display the already-awarded pot.
+    let pot: u64 = if engine.phase == EnginePhase::Complete {
+        0
+    } else {
+        engine.contributed.iter().sum()
+    };
+    let to_call = to_call_for_hero(engine, names.hero);
+
     let phase = Phase {
         label: phase_label(engine.phase),
         board: engine.board.clone(),
         dealt: engine.board.len(),
-        // Once the hand is complete the pot has been paid into the winners'
-        // stacks, so the live pot is empty. `contributed` is never reset, so
-        // showing its sum at `Complete` would display the already-awarded pot.
-        pot: if engine.phase == EnginePhase::Complete {
-            0
-        } else {
-            engine.contributed.iter().sum()
-        },
-        to_call: to_call_for_hero(engine, names.hero),
+        pot,
+        to_call,
+        // Filled in by `App::view`, which owns the live raise selection.
+        raise_to: None,
+        // Filled in by `App::view`, which owns the cached equity simulation.
         equity: 0,
-        odds_pct: 0.0,
+        odds_pct: pot_odds_pct(to_call, pot),
         rank,
     };
 
@@ -143,6 +153,8 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         phase,
         log,
         chat: Vec::<ChatLine>::new(),
+        // The App owns end-of-hand / game-over messaging; default to none here.
+        notice: None,
     }
 }
 
@@ -159,6 +171,15 @@ fn phase_label(p: EnginePhase) -> String {
 
 fn to_call_for_hero(engine: &HandState, hero: PlayerId) -> u64 {
     engine.current_bet.saturating_sub(engine.round_bet[hero.0])
+}
+
+/// Pot odds as a percentage: the share of the *final* pot the hero must put in
+/// to call. `to_call / (pot + to_call) * 100`. Zero when there is no bet to face.
+fn pot_odds_pct(to_call: u64, pot: u64) -> f32 {
+    if to_call == 0 {
+        return 0.0;
+    }
+    to_call as f32 / (pot + to_call) as f32 * 100.0
 }
 
 fn format_log_kind(kind: &poker_core::holdem::LogKind) -> String {
@@ -238,6 +259,32 @@ mod tests {
         assert_eq!(engine.phase, EnginePhase::Complete);
         let view = to_presentation(&engine, &NameRegistry::demo_six());
         assert_eq!(view.phase.pot, 0, "pot is empty once it has been paid out");
+    }
+
+    #[test]
+    fn pot_odds_are_call_over_final_pot() {
+        // Facing a 600 call into an 1850 pot: 600 / (1850 + 600) ≈ 24.5%.
+        assert!((pot_odds_pct(600, 1850) - 24.49).abs() < 0.1);
+    }
+
+    #[test]
+    fn pot_odds_are_zero_with_no_bet_to_face() {
+        assert_eq!(pot_odds_pct(0, 1850), 0.0);
+    }
+
+    #[test]
+    fn fresh_hand_pot_odds_for_utg_facing_the_big_blind() {
+        let cfg = HandConfig {
+            num_players: 6,
+            small_blind: 50,
+            big_blind: 100,
+            dealer: PlayerId(0),
+            seed: 1,
+        };
+        let engine = HandState::new_hand(cfg, vec![10_000; 6]);
+        // UTG faces a 100 call into the 150 blind pot: 100 / 250 = 40%.
+        let view = to_presentation(&engine, &NameRegistry::demo_six());
+        assert!((view.phase.odds_pct - 40.0).abs() < 0.01);
     }
 
     #[test]
