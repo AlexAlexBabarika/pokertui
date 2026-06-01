@@ -87,9 +87,9 @@ fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
     //   middle  : pot + board, centered
     //   bottom  : hero pod + action bar + key hints
     //
-    // Bottom block height: 6 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 13
-    let bottom_h: u16 = 13;
-    let top_h: u16 = 8;
+    // Bottom block height: 7 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 14
+    let bottom_h: u16 = 14;
+    let top_h: u16 = 9;
     let [top_strip, middle, bottom] = Layout::vertical([
         Constraint::Length(top_h),
         Constraint::Min(5),
@@ -179,7 +179,7 @@ fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
 
 fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
     let [hero_row, _gap, action_row, _gap2, hints_row] = Layout::vertical([
-        Constraint::Length(6),
+        Constraint::Length(7),
         Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Length(1),
@@ -188,8 +188,8 @@ fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
     .areas(area);
 
     if let Some(hero) = state.hero() {
-        // Hero pod is 10 wide × 6 tall, centered.
-        let pod_area = centered_rect(hero_row, POD_W, 6);
+        // Hero pod is 10 wide × 7 tall, centered.
+        let pod_area = centered_rect(hero_row, POD_W, 7);
         render_pod(frame, pod_area, hero, true);
     }
 
@@ -253,16 +253,17 @@ const BOARD_CARD_H: u16 = 5;
 
 fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     let hero = seat.is_hero();
-    // Pod is 10 wide × 6 tall — clip what we got.
+    // Pod is 10 wide × 7 tall — clip what we got.
     let pod = Rect {
         width: POD_W.min(area.width),
-        height: 6.min(area.height),
+        height: 7.min(area.height),
         ..area
     };
 
     // Cards row (rows 0..=3).
-    let [cards_row, name_row, info_row] = Layout::vertical([
+    let [cards_row, name_row, info_row, action_row] = Layout::vertical([
         Constraint::Length(CARD_H),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -306,8 +307,15 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     }
     put_line(frame, name_row.x, name_row.y, Line::from(name_spans));
 
-    // Info line: ◉ stack   <tag>
+    // Info line: ◉ stack
     let chip_seg = format!("◉ {}", fmt_int(seat.stack));
+    let info_line = Line::from(Span::styled(
+        chip_seg,
+        Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
+    ));
+    put_line(frame, info_row.x, info_row.y, info_line);
+
+    // Action line 
     let tag = if hero {
         if hero_is_actor { "▸ TO ACT" } else { "—" }
     } else {
@@ -318,18 +326,11 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
         (_, SeatStatus::Folded) => pal::DIM,
         _ => verb_color(&seat.last_action),
     };
-    let info_line = Line::from(vec![
-        Span::styled(
-            chip_seg,
-            Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            tag,
-            Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    put_line(frame, info_row.x, info_row.y, info_line);
+    let action_line = Line::from(Span::styled(
+        tag,
+        Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+    ));
+    put_line(frame, action_row.x, action_row.y, action_line);
 }
 
 // ---------------------------------------------------------------- board ------
