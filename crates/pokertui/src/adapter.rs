@@ -264,7 +264,10 @@ mod tests {
         assert_eq!(engine.phase, EnginePhase::Complete);
         // Hero is PlayerId(3) per demo_six — folded, but still sees own cards.
         let view = to_presentation(&engine, &NameRegistry::demo_six());
-        assert!(view.players[3].hole_cards.is_some(), "hero always sees own cards");
+        assert!(
+            view.players[3].hole_cards.is_some(),
+            "hero always sees own cards"
+        );
         assert!(
             view.players[4].hole_cards.is_none(),
             "a folded non-hero player's cards stay hidden at showdown"

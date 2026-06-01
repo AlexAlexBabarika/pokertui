@@ -315,7 +315,7 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     ));
     put_line(frame, info_row.x, info_row.y, info_line);
 
-    // Action line 
+    // Action line
     let tag = if hero {
         if hero_is_actor { "▸ TO ACT" } else { "—" }
     } else {
