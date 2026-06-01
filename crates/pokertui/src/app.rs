@@ -2,6 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use crossterm::event::KeyCode;
 use poker_core::Card;
+use poker_core::bot::BotProfile;
 use poker_core::equity::hero_equity;
 use poker_core::holdem::{Action, HandConfig, HandState, Phase, PlayerId, apply, legal_actions};
 
@@ -30,12 +31,43 @@ struct EquityCache {
     pct: u8,
 }
 
+/// Who drives a seat. The human plays the hero seat from the keyboard; every bot
+/// seat is driven by the decision engine. `Remote` (networked play) slots in
+/// here later without touching the rest of the table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Controller {
+    Human,
+    Bot(BotProfile),
+}
+
+impl Controller {
+    pub fn is_human(self) -> bool {
+        matches!(self, Controller::Human)
+    }
+}
+
+/// The hero seat the UI renders cards for: the first human-controlled seat. An
+/// all-bot table (allowed, e.g. a demo that just watches the bots play) has no
+/// human, so it falls back to seat 0 as the spectator viewpoint.
+fn hero_seat(seats: &[Controller]) -> PlayerId {
+    seats
+        .iter()
+        .position(|c| c.is_human())
+        .map(PlayerId)
+        .unwrap_or(PlayerId(0))
+}
+
 pub struct App {
     // `Option` so a turn can move the engine out (apply consumes it by value)
     // and move the result back without a placeholder. It is always `Some`
     // outside of `handle_key`; access it through `engine()`.
     engine: Option<HandState>,
     pub names: NameRegistry,
+    /// Who drives each seat, indexed by `PlayerId`. The hero is the first
+    /// `Human` seat; the rest are bots (until `Remote` is added). Read by
+    /// `App::step` (added next) to drive bot turns and to gate human input.
+    #[allow(dead_code)]
+    seats: Vec<Controller>,
     /// Currently selected raise/bet to-level. `None` = untouched → use min.
     /// Reset to `None` after every committed action.
     raise_to: Option<u64>,
@@ -57,14 +89,31 @@ impl App {
             seed: Self::fresh_seed(),
         };
         let engine = HandState::new_hand(cfg, vec![10_000; 6]);
-        let names = NameRegistry::demo_six();
+        let seats = Self::demo_seats();
+        let mut names = NameRegistry::demo_six();
+        // Keep the rendered hero consistent with the controller layout.
+        names.hero = hero_seat(&seats);
         Self {
             engine: Some(engine),
             names,
+            seats,
             raise_to: None,
             game_over: false,
             equity: None,
         }
+    }
+
+    /// The demo table: the human sits at seat 3 ("you"), surrounded by a spread
+    /// of bot personalities.
+    fn demo_seats() -> Vec<Controller> {
+        vec![
+            Controller::Bot(BotProfile::tag()),
+            Controller::Bot(BotProfile::calling_station()),
+            Controller::Bot(BotProfile::balanced()),
+            Controller::Human,
+            Controller::Bot(BotProfile::rock()),
+            Controller::Bot(BotProfile::tag()),
+        ]
     }
 
     /// A fresh seed off the wall clock so each hand deals differently.
@@ -262,6 +311,67 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_is_the_first_human_seat() {
+        let seats = vec![
+            Controller::Bot(BotProfile::tag()),
+            Controller::Bot(BotProfile::rock()),
+            Controller::Human,
+            Controller::Human,
+        ];
+        assert_eq!(
+            hero_seat(&seats),
+            PlayerId(2),
+            "first human, not the second"
+        );
+    }
+
+    #[test]
+    fn an_all_bot_table_falls_back_to_seat_zero() {
+        let seats = vec![
+            Controller::Bot(BotProfile::tag()),
+            Controller::Bot(BotProfile::rock()),
+        ];
+        assert_eq!(
+            hero_seat(&seats),
+            PlayerId(0),
+            "no human → seat 0 is the spectator viewpoint"
+        );
+    }
+
+    #[test]
+    fn demo_table_seats_one_human_among_bots() {
+        let app = App::new_demo_hand();
+        assert_eq!(
+            app.seats.len(),
+            app.engine().config.num_players,
+            "one controller per seat"
+        );
+        let humans = app.seats.iter().filter(|c| c.is_human()).count();
+        assert_eq!(humans, 1, "exactly one human at the demo table");
+        assert_eq!(
+            app.seats.iter().filter(|c| !c.is_human()).count(),
+            5,
+            "the other five seats are bots"
+        );
+    }
+
+    #[test]
+    fn demo_hero_is_the_human_seat_and_matches_the_name_registry() {
+        let app = App::new_demo_hand();
+        let hero = app.names.hero;
+        assert!(
+            app.seats[hero.0].is_human(),
+            "the hero seat must be human-controlled"
+        );
+        assert_eq!(
+            hero,
+            hero_seat(&app.seats),
+            "rendered hero matches the controller layout"
+        );
+        assert_eq!(hero, PlayerId(3), "the demo human sits at seat 3 (\"you\")");
+    }
 
     #[test]
     fn equity_tracks_whether_the_hero_is_live() {
