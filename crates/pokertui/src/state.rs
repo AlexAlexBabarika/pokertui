@@ -73,10 +73,6 @@ impl GameState {
         self.players.iter().find(|p| p.is_hero())
     }
 
-    pub fn by_name(&self, name: &str) -> Option<&Seat> {
-        self.players.iter().find(|p| p.name == name)
-    }
-
     #[cfg(test)]
     pub fn demo() -> Self {
         use poker_core::{Rank::*, Suit::*};

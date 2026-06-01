@@ -103,30 +103,44 @@ fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
 }
 
 fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
-    // Two active pods on the left, folded-roster on the right.
-    let [active_col, _, folded_col] = Layout::horizontal([
-        Constraint::Length(48),
-        Constraint::Length(2),
-        Constraint::Min(0),
-    ])
-    .areas(area);
-
-    let [rook_slot, gizmo_slot] =
-        Layout::horizontal([Constraint::Length(22), Constraint::Min(22)]).areas(active_col);
-
-    if let Some(rook) = state.by_name("rook") {
-        render_pod(frame, inset(rook_slot, 2, 1), rook, false);
-    }
-    if let Some(gizmo) = state.by_name("gizmo") {
-        render_pod(frame, inset(gizmo_slot, 2, 1), gizmo, false);
-    }
-
-    // Folded names, stacked.
+    // Opponents are everyone but the hero. Those still in the hand get a live
+    // pod on the left; those who have folded drop to a roster on the right.
+    // Driven entirely off seat status so any table size / fold pattern renders.
+    let active: Vec<&Seat> = state
+        .players
+        .iter()
+        .filter(|p| !p.is_hero() && p.status != SeatStatus::Folded)
+        .collect();
     let folded: Vec<&Seat> = state
         .players
         .iter()
-        .filter(|p| p.status == SeatStatus::Folded)
+        .filter(|p| !p.is_hero() && p.status == SeatStatus::Folded)
         .collect();
+
+    // Reserve a roster column only when someone has folded; otherwise pods
+    // take the whole strip.
+    let roster_w: u16 = if folded.is_empty() { 0 } else { 18 };
+    let [active_col, folded_col] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(roster_w)]).areas(area);
+
+    // Lay the active pods left-to-right in equal slots: two opponents get room
+    // to breathe, five still fit (clipping gracefully when cramped).
+    if !active.is_empty() {
+        let slot_w = (active_col.width / active.len() as u16).max(1);
+        let mut x = active_col.x;
+        for p in &active {
+            let slot = Rect {
+                x,
+                y: active_col.y,
+                width: slot_w,
+                height: active_col.height,
+            };
+            render_pod(frame, inset(slot, 2, 1), p, false);
+            x = x.saturating_add(slot_w);
+        }
+    }
+
+    // Folded names, stacked.
     let folded_inner = inset(folded_col, 0, 1);
     for (i, p) in folded.iter().enumerate() {
         if (i as u16) >= folded_inner.height {
@@ -875,11 +889,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn dump(width: u16, height: u16) -> String {
+    fn dump_state(state: &GameState, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        let state = GameState::demo();
-        terminal.draw(|frame| render(frame, &state)).expect("draw");
+        terminal.draw(|frame| render(frame, state)).expect("draw");
         let buf = terminal.backend().buffer().clone();
         let mut out = String::new();
         for y in 0..buf.area.height {
@@ -889,6 +902,10 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    fn dump(width: u16, height: u16) -> String {
+        dump_state(&GameState::demo(), width, height)
     }
 
     #[test]
@@ -913,6 +930,46 @@ mod tests {
         assert!(frame.contains("gizmo"), "active opponent missing");
         assert!(frame.contains("nova"), "folded opponent missing");
         assert!(frame.contains("nice spot"), "chat content missing");
+    }
+
+    #[test]
+    fn every_active_opponent_is_shown() {
+        // A live hand opens with all opponents in. They must all be visible,
+        // not just the two the workbench happened to leave active.
+        let mut state = GameState::demo();
+        for p in &mut state.players {
+            if !p.is_hero() {
+                p.status = SeatStatus::Active;
+                p.last_action = "—".into();
+            }
+        }
+        let frame = dump_state(&state, 120, 40);
+        for name in ["nova", "delta", "gizmo", "maple", "rook"] {
+            assert!(frame.contains(name), "active opponent {name} not shown");
+        }
+    }
+
+    #[test]
+    fn a_folded_opponent_is_shown_once_as_folded() {
+        // When an opponent folds they should drop to the folded roster — not
+        // keep a live pod while also appearing in the roster.
+        let mut state = GameState::demo();
+        for p in &mut state.players {
+            if p.name == "rook" {
+                p.status = SeatStatus::Folded;
+                p.last_action = "fold".into();
+            }
+        }
+        let frame = dump_state(&state, 120, 40);
+        // The opponent strip lives in the top rows; the log/chat panels below
+        // also name "rook", so scope the duplication check to those rows.
+        let strip: String = frame.lines().take(9).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            strip.matches("rook").count(),
+            1,
+            "a folded opponent should appear once, in the roster — not also as a live pod"
+        );
+        assert!(strip.contains("folded"), "fold status not surfaced");
     }
 
     #[test]
