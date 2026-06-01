@@ -16,7 +16,7 @@ pub struct Seat {
     pub status: SeatStatus,
     pub last_action: String,
     pub hole_cards: Option<[Card; 2]>,
-    /// True when it is this seat's turn to act. 
+    /// True when it is this seat's turn to act.
     pub is_to_act: bool,
 }
 

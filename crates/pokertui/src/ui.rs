@@ -44,8 +44,23 @@ pub fn render(frame: &mut Frame, state: &GameState) {
     let [table_area, rail_area] =
         Layout::horizontal([Constraint::Min(40), Constraint::Length(rail_w)]).areas(body);
 
-    render_table(frame, table_area, state);
+    // Cards that form the hero's current made hand (hole + visible board),
+    // kickers excluded. These render green wherever they appear.
+    let highlight = hero_made_cards(state);
+
+    render_table(frame, table_area, state, &highlight);
     render_rail(frame, rail_area, state);
+}
+
+/// The hero's made-hand cards for the current street, or empty if no hero /
+/// no hole cards yet.
+fn hero_made_cards(state: &GameState) -> Vec<Card> {
+    let Some(hole) = state.hero().and_then(|h| h.hole_cards) else {
+        return Vec::new();
+    };
+    let mut cards = hole.to_vec();
+    cards.extend(state.phase.board.iter().take(state.phase.dealt).copied());
+    poker_core::made_hand_cards(&cards)
 }
 
 fn render_too_small(frame: &mut Frame, area: Rect) {
@@ -80,7 +95,7 @@ fn render_title_bar(frame: &mut Frame, area: Rect, state: &GameState) {
 
 // ---------------------------------------------------------------- table ------
 
-fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_table(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     // Vertical regions inside the table column:
     //   row 0   : (in body coords) spacer / divider header
     //   rows 1..top_h : opponent strip
@@ -98,8 +113,8 @@ fn render_table(frame: &mut Frame, area: Rect, state: &GameState) {
     .areas(area);
 
     render_opponents(frame, top_strip, state);
-    render_center(frame, middle, state);
-    render_bottom(frame, bottom, state);
+    render_center(frame, middle, state, highlight);
+    render_bottom(frame, bottom, state, highlight);
 }
 
 fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
@@ -135,7 +150,8 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
                 width: slot_w,
                 height: active_col.height,
             };
-            render_pod(frame, inset(slot, 2, 1), p, false);
+            // Opponent cards stay face-down, so no combination can highlight.
+            render_pod(frame, inset(slot, 2, 1), p, false, &[]);
             x = x.saturating_add(slot_w);
         }
     }
@@ -156,7 +172,7 @@ fn render_opponents(frame: &mut Frame, area: Rect, state: &GameState) {
     }
 }
 
-fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_center(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     // Board sits below pot pill (1 tall) with a 1-row gap.
     let needed_h: u16 = 1 + 1 + BOARD_CARD_H;
     let block_h = needed_h.min(area.height);
@@ -174,10 +190,10 @@ fn render_center(frame: &mut Frame, area: Rect, state: &GameState) {
     .areas(block);
 
     render_pot_pill(frame, pot_row, state);
-    render_board(frame, board_row, state);
+    render_board(frame, board_row, state, highlight);
 }
 
-fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     let [hero_row, _gap, action_row, _gap2, hints_row] = Layout::vertical([
         Constraint::Length(7),
         Constraint::Length(1),
@@ -190,7 +206,7 @@ fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState) {
     if let Some(hero) = state.hero() {
         // Hero pod is 10 wide × 7 tall, centered.
         let pod_area = centered_rect(hero_row, POD_W, 7);
-        render_pod(frame, pod_area, hero, true);
+        render_pod(frame, pod_area, hero, true, highlight);
     }
 
     let action_area = inset(action_row, 2, 0);
@@ -251,7 +267,7 @@ const POD_W: u16 = CARD_W * 2; // 10
 const BOARD_CARD_W: u16 = 7;
 const BOARD_CARD_H: u16 = 5;
 
-fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
+fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool, highlight: &[Card]) {
     let hero = seat.is_hero();
     // Pod is 10 wide × 7 tall — clip what we got.
     let pod = Rect {
@@ -275,8 +291,8 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
     let face_up = hero;
     match (face_up, seat.hole_cards) {
         (true, Some([c0, c1])) => {
-            render_card(frame, left_card, c0, hero);
-            render_card(frame, right_card, c1, hero);
+            render_card(frame, left_card, c0, highlight.contains(&c0));
+            render_card(frame, right_card, c1, highlight.contains(&c1));
         }
         _ => {
             render_card_back(frame, left_card);
@@ -336,7 +352,7 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool) {
 
 // ---------------------------------------------------------------- board ------
 
-fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
+fn render_board(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     let slots = 5u16;
     let gap = 2u16;
     let total_w = slots * BOARD_CARD_W + (slots - 1) * gap;
@@ -352,9 +368,7 @@ fn render_board(frame: &mut Frame, area: Rect, state: &GameState) {
         };
         match state.phase.board.get(i) {
             Some(&card) if i < state.phase.dealt => {
-                let fresh = matches!(state.phase.label.as_str(), "TURN") && i == 3
-                    || matches!(state.phase.label.as_str(), "RIVER" | "SHOWDOWN") && i == 4;
-                render_card(frame, slot, card, fresh);
+                render_card(frame, slot, card, highlight.contains(&card));
             }
             _ => render_card_slot(frame, slot),
         }
