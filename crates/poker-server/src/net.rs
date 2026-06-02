@@ -23,7 +23,7 @@ enum ServerMsgIn {
 pub async fn serve(bind: &str, config: RoomConfig) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     eprintln!(
-        "poker-server listening on {bind} for {} seats",
+        "pokertui-server listening on {bind} for {} seats",
         config.seats
     );
 

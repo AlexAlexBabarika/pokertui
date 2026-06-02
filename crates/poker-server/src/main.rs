@@ -10,7 +10,7 @@ use crate::room::RoomConfig;
 /// Headless Texas Hold'em server: hosts one room, deals once every seat is
 /// filled, and plays hands until only one funded player remains.
 #[derive(Parser, Debug)]
-#[command(name = "poker-server")]
+#[command(name = "pokertui-server")]
 struct Args {
     /// Address to bind, e.g. 0.0.0.0:4000
     #[arg(long, default_value = "0.0.0.0:4000")]

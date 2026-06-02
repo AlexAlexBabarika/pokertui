@@ -1,5 +1,5 @@
 use poker_core::Card;
-use poker_core::holdem::{Action, Phase as EnginePhase, PlayerId};
+use poker_core::holdem::{Action, PlayerId};
 use poker_net::state::PublicState;
 
 use crate::adapter::{phase_label, position_label, pot_odds_pct};
@@ -8,10 +8,13 @@ use crate::state::{ChatLine, GameState, LogEntry, Phase, Seat, SeatStatus};
 /// Build the renderer's `GameState` from a filtered `PublicState`. Equity,
 /// raise selection, and the end-of-hand notice are layered on by `NetClient`
 /// (they depend on client-only state), so they are left at their defaults here.
-pub fn to_presentation_net(state: &PublicState, feed: &[LogEntry], chat: &[ChatLine]) -> GameState {
+pub(crate) fn to_presentation_net(
+    state: &PublicState,
+    feed: &[LogEntry],
+    chat: &[ChatLine],
+) -> GameState {
     let n = state.num_players;
     let hero = state.your_seat;
-    let complete = state.phase == EnginePhase::Complete;
 
     let players = (0..n)
         .map(|i| {
@@ -73,8 +76,6 @@ pub fn to_presentation_net(state: &PublicState, feed: &[LogEntry], chat: &[ChatL
         rank,
     };
 
-    let _ = complete; // documented above; status already accounts for it.
-
     GameState {
         blinds: format!("{} / {}", state.small_blind, state.big_blind),
         players,
@@ -87,7 +88,7 @@ pub fn to_presentation_net(state: &PublicState, feed: &[LogEntry], chat: &[ChatL
 }
 
 /// Render one engine `Action` as the short label the feed/roster shows.
-pub fn format_action(a: Action) -> String {
+pub(crate) fn format_action(a: Action) -> String {
     match a {
         Action::Fold => "fold".into(),
         Action::Check => "check".into(),

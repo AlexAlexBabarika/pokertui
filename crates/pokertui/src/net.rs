@@ -29,7 +29,6 @@ pub struct NetClient {
     /// The legal actions for *our* current turn, or `None` when it is not our
     /// turn. Set by `YourTurn`, cleared when we act or the state moves on.
     legal: Option<Vec<Action>>,
-    deadline_ms: u64,
 
     feed: Vec<LogEntry>,
     chat: Vec<ChatLine>,
@@ -102,7 +101,6 @@ impl NetClient {
             your_seat: None,
             latest: None,
             legal: None,
-            deadline_ms: 0,
             feed: Vec::new(),
             chat: Vec::new(),
             last_seen: Vec::new(),
@@ -126,9 +124,8 @@ impl NetClient {
                 self.latest = Some(state);
                 self.notice = self.derive_notice();
             }
-            ServerMsg::YourTurn { legal, deadline_ms } => {
+            ServerMsg::YourTurn { legal, .. } => {
                 self.legal = Some(legal);
-                self.deadline_ms = deadline_ms;
                 self.raise_to = None;
             }
             ServerMsg::Chat { who, msg } => {
@@ -205,15 +202,17 @@ impl NetClient {
         let opponents = (0..state.num_players)
             .filter(|&i| PlayerId(i) != hero && !state.seats[i].folded)
             .count();
-        let board = state.board.clone();
-        let hole_v = hole.to_vec();
+        // Cheap path: compare against the cached key without allocating. Only a
+        // genuine miss (hole/board/opponents changed) pays for the clones below.
         if let Some((ch, cb, co, pct)) = &self.equity_cache
-            && *ch == hole_v
-            && *cb == board
+            && ch.as_slice() == hole.as_slice()
+            && cb.as_slice() == state.board.as_slice()
             && *co == opponents
         {
             return *pct;
         }
+        let board = state.board.clone();
+        let hole_v = hole.to_vec();
         // Deterministic seed from the situation, like the local client.
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         for c in hole_v.iter().chain(board.iter()) {
@@ -293,11 +292,14 @@ impl Table for NetClient {
             if let Some((min, max)) = self.raise_bounds() {
                 let step = self.latest.as_ref().map(|s| s.small_blind).unwrap_or(1);
                 let cur = self.raise_to.unwrap_or(min);
-                self.raise_to = Some(if matches!(key, KeyCode::Up) {
+                let next = if matches!(key, KeyCode::Up) {
                     cur.saturating_add(step).min(max)
                 } else {
                     cur.saturating_sub(step).max(min)
-                });
+                };
+                self.raise_to = Some(next);
+                // Report a real change so the renderer refreshes the raise box.
+                return next != cur;
             }
             return false;
         }
@@ -326,6 +328,13 @@ impl Table for NetClient {
         let Some(action) = action else {
             return false;
         };
+        // Only send actions the server marked legal. `legal` carries Bet/Raise
+        // with a representative `to`, so match on the variant, not the amount;
+        // an out-of-set key (e.g. all-in when no all-in is offered) is ignored
+        // rather than sent and bounced back as an Error.
+        if !legal_has(&legal, &action) {
+            return false;
+        }
         // Send to the server and optimistically clear our turn; the next
         // StateUpdate/YourTurn is authoritative.
         let _ = self.to_net.send(ClientMsg::Action(action));
@@ -347,6 +356,14 @@ impl Table for NetClient {
             }
         }
     }
+}
+
+/// Whether `want` is offered in `legal`, compared by variant so a chosen
+/// `Bet`/`Raise` to-level matches the server's representative (min) amount.
+fn legal_has(legal: &[Action], want: &Action) -> bool {
+    legal
+        .iter()
+        .any(|a| std::mem::discriminant(a) == std::mem::discriminant(want))
 }
 
 /// Feed tone for an action (mirrors the local adapter's `tone_for`).
@@ -427,6 +444,23 @@ mod tests {
         let consumed = c.handle_key(KeyCode::Char('c'));
         assert!(consumed, "a legal call is consumed");
         assert!(c.legal.is_none(), "turn cleared after acting");
+    }
+
+    #[test]
+    fn a_key_for_an_action_outside_legal_is_not_sent() {
+        let mut c = detached();
+        c.ingest(ServerMsg::Welcome {
+            your_seat: PlayerId(3),
+        });
+        c.ingest(ServerMsg::StateUpdate(state_for(3, |e| e)));
+        // The server offers only fold/call — no all-in this turn.
+        c.ingest(ServerMsg::YourTurn {
+            legal: vec![Action::Fold, Action::Call],
+            deadline_ms: 30_000,
+        });
+        // Pressing 'a' (all-in) must be dropped, not sent and bounced.
+        assert!(!c.handle_key(KeyCode::Char('a')), "off-set action ignored");
+        assert!(c.legal.is_some(), "our turn is untouched");
     }
 
     #[test]

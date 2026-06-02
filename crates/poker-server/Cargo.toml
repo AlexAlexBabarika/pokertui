@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# The crate stays `poker-server`, but the installed command is `pokertui-server`.
+[[bin]]
+name = "pokertui-server"
+path = "src/main.rs"
+
 [dependencies]
 poker-core = { workspace = true }
 poker-net = { workspace = true }
