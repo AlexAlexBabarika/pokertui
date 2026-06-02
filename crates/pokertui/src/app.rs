@@ -505,6 +505,18 @@ impl App {
     }
 }
 
+impl crate::table::Table for App {
+    fn view(&mut self) -> GameState {
+        App::view(self)
+    }
+    fn handle_key(&mut self, key: KeyCode) -> bool {
+        App::handle_key(self, key)
+    }
+    fn step(&mut self) {
+        App::step(self);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

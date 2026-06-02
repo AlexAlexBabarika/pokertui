@@ -70,10 +70,18 @@ impl SettingsMenu {
     /// `(label, current value)` for each row, in display order.
     fn rows(&self) -> [(&'static str, String); ROWS] {
         [
-            ("Bot delay", format!("{} ms", self.draft.bot_delay.as_millis())),
+            (
+                "Bot delay",
+                format!("{} ms", self.draft.bot_delay.as_millis()),
+            ),
             (
                 "Show win rate",
-                if self.draft.show_win_rate { "on" } else { "off" }.to_string(),
+                if self.draft.show_win_rate {
+                    "on"
+                } else {
+                    "off"
+                }
+                .to_string(),
             ),
             ("Seats", self.draft.seats.to_string()),
             (
@@ -138,7 +146,10 @@ pub fn render_settings(frame: &mut Frame, area: Rect, menu: &SettingsMenu) {
             Span::styled(" select   ", Style::default().fg(MUTED)),
             Span::styled("←→", Style::default().fg(LIME).add_modifier(Modifier::BOLD)),
             Span::styled(" change   ", Style::default().fg(MUTED)),
-            Span::styled("Esc", Style::default().fg(LIME).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default().fg(LIME).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" done", Style::default().fg(MUTED)),
         ])),
         footer_area,
