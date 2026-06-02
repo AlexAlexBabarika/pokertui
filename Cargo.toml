@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 poker-core = { path = "crates/poker-core" }
+serde = { version = "1", features = ["derive"] }
 rand = "0.10"
 rs_poker = { version = "4.1", default-features = false }
 crossterm = "0.29"

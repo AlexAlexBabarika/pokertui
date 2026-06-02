@@ -1,7 +1,9 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct PlayerId(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Phase {
     Preflop,
     Flop,
@@ -11,7 +13,7 @@ pub enum Phase {
     Complete,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Action {
     Fold,
     Check,
@@ -51,5 +53,13 @@ mod tests {
     fn action_equality_uses_amount() {
         assert_eq!(Action::Bet { to: 100 }, Action::Bet { to: 100 });
         assert_ne!(Action::Bet { to: 100 }, Action::Bet { to: 200 });
+    }
+
+    #[test]
+    fn action_serde_round_trips_as_json() {
+        let raise = Action::Raise { to: 300 };
+        let json = serde_json::to_string(&raise).expect("serialize");
+        let back: Action = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, raise);
     }
 }
