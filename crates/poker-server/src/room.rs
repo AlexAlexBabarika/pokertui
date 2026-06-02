@@ -474,4 +474,72 @@ mod tests {
             "the completed (showdown) state is still broadcast"
         );
     }
+
+    #[test]
+    fn a_turn_timeout_auto_folds_the_seat_to_act() {
+        let (mut room, actor) = started();
+        let generation = room.turn_gen();
+        room.apply_event(RoomEvent::Timeout {
+            seat: actor,
+            generation,
+        });
+        assert!(room.engine().folded[actor.0], "timed-out seat is folded");
+    }
+
+    #[test]
+    fn a_stale_timeout_is_ignored() {
+        let (mut room, actor) = started();
+        let stale = room.turn_gen() - 1; // a generation that has already passed
+        let out = room.apply_event(RoomEvent::Timeout {
+            seat: actor,
+            generation: stale,
+        });
+        assert!(out.is_empty(), "a stale timer produces nothing");
+        assert!(!room.engine().folded[actor.0], "no fold from a stale timer");
+    }
+
+    #[test]
+    fn a_disconnect_on_your_turn_auto_folds_you() {
+        let (mut room, actor) = started();
+        room.apply_event(RoomEvent::Disconnect { seat: actor });
+        assert!(room.engine().folded[actor.0], "disconnect folds the actor");
+    }
+
+    #[test]
+    fn a_disconnected_seat_is_auto_folded_when_its_turn_arrives() {
+        // 3 seats so folding the actor does not end the hand. Disconnect a seat
+        // that is NOT currently to act, then advance to it.
+        let mut room = Room::new(config(3));
+        join_all(&mut room, 3);
+        let first = room.engine().to_act.unwrap();
+        let victim = PlayerId((first.0 + 1) % 3);
+        room.apply_event(RoomEvent::Disconnect { seat: victim });
+        // `first` acts; when the turn reaches the disconnected `victim` the room
+        // must fold it without waiting for input.
+        room.apply_event(RoomEvent::Action {
+            seat: first,
+            action: Action::Call,
+        });
+        assert!(
+            room.engine().folded[victim.0],
+            "the disconnected seat is folded the moment it is to act"
+        );
+    }
+
+    #[test]
+    fn continue_deals_the_next_hand_when_two_remain_funded() {
+        let (mut room, actor) = started();
+        room.apply_event(RoomEvent::Action {
+            seat: actor,
+            action: Action::Fold,
+        });
+        assert_eq!(room.engine().phase, Phase::Complete);
+        let out = room.apply_event(RoomEvent::Continue);
+        assert_eq!(room.engine().phase, Phase::Preflop, "fresh hand dealt");
+        assert!(
+            out.iter()
+                .any(|o| matches!(o.msg, ServerMsg::YourTurn { .. })),
+            "the new hand announces a turn"
+        );
+    }
 }
