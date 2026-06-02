@@ -7,19 +7,40 @@ pub struct NameRegistry {
     pub hero: PlayerId,
 }
 
+/// The hero's seat index for an `n`-handed demo table: seat 3 ("you") on a
+/// full table, the last seat on smaller ones. Shared with `App::build_seats`
+/// so the rendered hero matches the controller layout.
+pub fn hero_index(n: usize) -> usize {
+    (n - 1).min(3)
+}
+
 impl NameRegistry {
-    pub fn demo_six() -> Self {
+    /// Demo names for an `n`-handed table: "you" at the hero seat, the rest
+    /// drawn in order from a fixed pool.
+    pub fn demo(n: usize) -> Self {
+        const POOL: [&str; 5] = ["nova", "delta", "gizmo", "maple", "rook"];
+        let hero = hero_index(n);
+        let mut pool = POOL.iter();
+        let names = (0..n)
+            .map(|i| {
+                if i == hero {
+                    "you".to_string()
+                } else {
+                    pool.next()
+                        .expect("pool covers every non-hero seat (n <= 6)")
+                        .to_string()
+                }
+            })
+            .collect();
         Self {
-            names: vec![
-                "nova".into(),
-                "delta".into(),
-                "gizmo".into(),
-                "you".into(),
-                "maple".into(),
-                "rook".into(),
-            ],
-            hero: PlayerId(3),
+            names,
+            hero: PlayerId(hero),
         }
+    }
+
+    #[cfg(test)]
+    pub fn demo_six() -> Self {
+        Self::demo(6)
     }
 }
 
@@ -163,6 +184,8 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         chat: Vec::<ChatLine>::new(),
         // The App owns end-of-hand / game-over messaging; default to none here.
         notice: None,
+        // The App stamps this from the player's settings in `view`.
+        show_win_rate: true,
     }
 }
 
