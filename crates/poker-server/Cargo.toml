@@ -3,6 +3,9 @@ name = "poker-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/AlexAlexBabarika/pokertui"
+description = "A terminal Texas Hold'em game written in Rust. Play heads-up or full-ring\nagainst bots in a single binary, or connect to a headless server and play a\ntable over the network."
+homepage = "https://github.com/AlexAlexBabarika/pokertui"
 
 # The crate stays `poker-server`, but the installed command is `pokertui-server`.
 [[bin]]

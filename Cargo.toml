@@ -6,6 +6,10 @@ members = ["crates/poker-core", "crates/poker-net", "crates/poker-server", "crat
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/AlexAlexBabarika/pokertui"
+description = "A terminal Texas Hold'em game written in Rust. Play heads-up or full-ring\nagainst bots in a single binary, or connect to a headless server and play a\ntable over the network."
+homepage = "https://github.com/AlexAlexBabarika/pokertui"
+
 
 [workspace.dependencies]
 poker-core = { path = "crates/poker-core" }
@@ -19,3 +23,8 @@ rs_poker = { version = "4.1", default-features = false }
 crossterm = "0.29"
 ratatui = "0.30"
 tui-cards = "0.3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
