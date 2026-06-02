@@ -107,8 +107,8 @@ fn render_table(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[C
     //   middle  : pot + board, centered
     //   bottom  : hero pod + action bar + key hints
     //
-    // Bottom block height: 7 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 14
-    let bottom_h: u16 = 14;
+    // Bottom block height: 8 (hero) + 1 (gap) + 4 (action bar) + 1 (gap) + 1 (hints) = 15
+    let bottom_h: u16 = 15;
     let top_h: u16 = 9;
     let [top_strip, middle, bottom] = Layout::vertical([
         Constraint::Length(top_h),
@@ -218,7 +218,7 @@ fn render_notice(frame: &mut Frame, area: Rect, text: &str) {
 
 fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[Card]) {
     let [hero_row, _gap, action_row, _gap2, hints_row] = Layout::vertical([
-        Constraint::Length(7),
+        Constraint::Length(8),
         Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Length(1),
@@ -227,8 +227,8 @@ fn render_bottom(frame: &mut Frame, area: Rect, state: &GameState, highlight: &[
     .areas(area);
 
     if let Some(hero) = state.hero() {
-        // Hero pod is 10 wide × 7 tall, centered.
-        let pod_area = centered_rect(hero_row, POD_W, 7);
+        // Hero pod is 10 wide × 8 tall, centered.
+        let pod_area = centered_rect(hero_row, POD_W, 8);
         render_pod(frame, pod_area, hero, true, highlight);
     }
 
@@ -292,16 +292,17 @@ const BOARD_CARD_H: u16 = 5;
 
 fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool, highlight: &[Card]) {
     let hero = seat.is_hero();
-    // Pod is 10 wide × 7 tall — clip what we got.
+    // Pod is 10 wide × 8 tall — clip what we got.
     let pod = Rect {
         width: POD_W.min(area.width),
-        height: 7.min(area.height),
+        height: 8.min(area.height),
         ..area
     };
 
     // Cards row (rows 0..=3).
-    let [cards_row, name_row, info_row, action_row] = Layout::vertical([
+    let [cards_row, name_row, info_row, bet_row, action_row] = Layout::vertical([
         Constraint::Length(CARD_H),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -354,6 +355,15 @@ fn render_pod(frame: &mut Frame, area: Rect, seat: &Seat, hero_is_actor: bool, h
         Style::default().fg(pal::AMBER).add_modifier(Modifier::BOLD),
     ));
     put_line(frame, info_row.x, info_row.y, info_line);
+
+    // Bet line: chips this seat has committed on the current street, in red.
+    // Always shown — it reads 0 once a new street begins.
+    let bet_seg = format!("◉ {}", fmt_int(seat.round_bet));
+    let bet_line = Line::from(Span::styled(
+        bet_seg,
+        Style::default().fg(pal::RED).add_modifier(Modifier::BOLD),
+    ));
+    put_line(frame, bet_row.x, bet_row.y, bet_line);
 
     // Action line
     let tag = if hero {
@@ -1045,6 +1055,24 @@ mod tests {
         assert!(
             strip.contains("busted"),
             "a busted player should be labeled 'busted' in the roster"
+        );
+    }
+
+    #[test]
+    fn pods_show_the_round_bet_below_the_stack() {
+        // The demo is on the turn: rook bet 600 and gizmo called 600, so both
+        // pods carry a 600 street bet; the hero has not acted yet (0).
+        let frame = dump(120, 40);
+        // The hero's stack line is followed immediately by a zeroed bet line.
+        assert!(frame.contains("◉ 12,450"), "hero stack line missing");
+        assert!(
+            frame.contains("◉ 0"),
+            "hero's street bet (0, not yet acted) should be shown"
+        );
+        // A seat that has put chips in this street shows that amount.
+        assert!(
+            frame.contains("◉ 600"),
+            "an opponent's street bet should be shown below their stack"
         );
     }
 

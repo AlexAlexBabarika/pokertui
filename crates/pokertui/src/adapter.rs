@@ -89,6 +89,13 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
         } else {
             None
         };
+        // Once the hand is complete the round bets have been swept into the pot
+        // and paid out, so there is nothing left committed this street.
+        let round_bet = if engine.phase == EnginePhase::Complete {
+            0
+        } else {
+            engine.round_bet[i]
+        };
         players.push(Seat {
             name: names.names[i].clone(),
             pos,
@@ -97,6 +104,7 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
             last_action,
             hole_cards,
             is_to_act: engine.to_act == Some(PlayerId(i)),
+            round_bet,
         });
     }
 

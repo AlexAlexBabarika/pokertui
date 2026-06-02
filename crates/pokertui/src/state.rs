@@ -20,6 +20,9 @@ pub struct Seat {
     pub hole_cards: Option<[Card; 2]>,
     /// True when it is this seat's turn to act.
     pub is_to_act: bool,
+    /// Chips this seat has committed during the current betting round (street).
+    /// Resets to 0 when a new street begins.
+    pub round_bet: u64,
 }
 
 impl Seat {
@@ -99,6 +102,7 @@ impl GameState {
                     last_action: "fold".into(),
                     hole_cards: None,
                     is_to_act: false,
+                    round_bet: 0,
                 },
                 Seat {
                     name: "delta".into(),
@@ -108,6 +112,7 @@ impl GameState {
                     last_action: "fold".into(),
                     hole_cards: None,
                     is_to_act: false,
+                    round_bet: 0,
                 },
                 Seat {
                     name: "gizmo".into(),
@@ -117,6 +122,7 @@ impl GameState {
                     last_action: "call 600".into(),
                     hole_cards: None,
                     is_to_act: false,
+                    round_bet: 600,
                 },
                 Seat {
                     name: "you".into(),
@@ -126,6 +132,7 @@ impl GameState {
                     last_action: "—".into(),
                     hole_cards: Some([card(Ace, Spades), card(King, Hearts)]),
                     is_to_act: true,
+                    round_bet: 0,
                 },
                 Seat {
                     name: "maple".into(),
@@ -135,6 +142,7 @@ impl GameState {
                     last_action: "fold".into(),
                     hole_cards: None,
                     is_to_act: false,
+                    round_bet: 0,
                 },
                 Seat {
                     name: "rook".into(),
@@ -144,6 +152,7 @@ impl GameState {
                     last_action: "bet 600".into(),
                     hole_cards: Some([card(King, Clubs), card(Queen, Diamonds)]),
                     is_to_act: false,
+                    round_bet: 600,
                 },
             ],
             phase: Phase {
