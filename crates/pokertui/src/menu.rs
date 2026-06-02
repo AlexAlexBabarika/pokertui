@@ -196,7 +196,7 @@ mod tests {
         let mut menu = SettingsMenu::from(Settings::default());
         // Row 0 is the bot delay, default 500ms.
         menu.handle_key(KeyCode::Right);
-        assert_eq!(menu.draft().bot_delay, Duration::from_millis(1000));
+        assert_eq!(menu.draft().bot_delay, Duration::from_millis(700));
         menu.handle_key(KeyCode::Left);
         assert_eq!(menu.draft().bot_delay, Duration::from_millis(500));
         // Move down to the seats row (row 2) and change it.

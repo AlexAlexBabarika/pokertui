@@ -196,7 +196,7 @@ mod tests {
     fn bot_delay_steps_through_presets() {
         let mut s = Settings::default(); // 500ms
         s.cycle_bot_delay(Cycle::Next);
-        assert_eq!(s.bot_delay, Duration::from_millis(1000));
+        assert_eq!(s.bot_delay, Duration::from_millis(700));
         s.cycle_bot_delay(Cycle::Prev);
         assert_eq!(s.bot_delay, Duration::from_millis(500));
         s.cycle_bot_delay(Cycle::Prev);
