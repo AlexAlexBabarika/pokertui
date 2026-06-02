@@ -1141,10 +1141,13 @@ dependencies = [
 name = "pokertui"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "crossterm",
  "poker-core",
+ "poker-net",
  "ratatui",
  "serde",
+ "tokio",
  "toml",
  "tui-cards",
 ]
