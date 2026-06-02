@@ -8,11 +8,7 @@ use crate::state::{ChatLine, GameState, LogEntry, Phase, Seat, SeatStatus};
 /// Build the renderer's `GameState` from a filtered `PublicState`. Equity,
 /// raise selection, and the end-of-hand notice are layered on by `NetClient`
 /// (they depend on client-only state), so they are left at their defaults here.
-pub fn to_presentation_net(
-    state: &PublicState,
-    feed: &[LogEntry],
-    chat: &[ChatLine],
-) -> GameState {
+pub fn to_presentation_net(state: &PublicState, feed: &[LogEntry], chat: &[ChatLine]) -> GameState {
     let n = state.num_players;
     let hero = state.your_seat;
     let complete = state.phase == EnginePhase::Complete;
