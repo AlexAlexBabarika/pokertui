@@ -78,6 +78,9 @@ pub struct GameState {
     /// A transient banner shown over the table: the "press a key" prompt at the
     /// end of a hand, or the game-over message. `None` during live play.
     pub notice: Option<String>,
+    /// Whether the `EQUITY · POT ODDS` rail panel is shown. Stamped from the
+    /// player's settings; when false the action log reclaims the freed rows.
+    pub show_win_rate: bool,
 }
 
 impl GameState {
@@ -248,6 +251,7 @@ impl GameState {
                 },
             ],
             notice: None,
+            show_win_rate: true,
         }
     }
 }

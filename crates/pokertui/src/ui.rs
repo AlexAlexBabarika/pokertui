@@ -254,30 +254,46 @@ fn render_rail(frame: &mut Frame, area: Rect, state: &GameState) {
     frame.render_widget(frame_block, area);
 
     let inner = inset(inner, 1, 1);
-    // Stack: HAND (5) · gap (1) · EQUITY (5) · gap (1) · LOG (flex) · gap (1) · CHAT (6)
+    // Stack: HAND (4) · gap (1) · [EQUITY (5) · gap (1)] · LOG (flex) · gap (1) · CHAT (6)
+    // The equity panel is dropped entirely when the win-rate display is off,
+    // and the action log reclaims the rows it would have used.
     let hand_h: u16 = 4;
-    let eq_h: u16 = 5;
+    let eq_h: u16 = if state.show_win_rate { 5 } else { 0 };
     let chat_h: u16 = 6;
     let gap: u16 = 1;
-    let log_h = inner
-        .height
-        .saturating_sub(hand_h + eq_h + chat_h + gap * 3)
-        .max(3);
-    let [hand_a, _, eq_a, _, log_a, _, chat_a] = Layout::vertical([
-        Constraint::Length(hand_h),
-        Constraint::Length(gap),
-        Constraint::Length(eq_h),
-        Constraint::Length(gap),
-        Constraint::Length(log_h),
-        Constraint::Length(gap),
-        Constraint::Length(chat_h),
-    ])
-    .areas(inner);
+    // One gap above the log and one above chat; the equity panel adds its own
+    // gap above the log only when it is shown.
+    let fixed = hand_h + eq_h + chat_h + gap * 2 + if state.show_win_rate { gap } else { 0 };
+    let log_h = inner.height.saturating_sub(fixed).max(3);
 
-    render_panel_hand(frame, hand_a, state);
-    render_panel_equity(frame, eq_a, state);
-    render_panel_log(frame, log_a, state);
-    render_panel_chat(frame, chat_a, state);
+    if state.show_win_rate {
+        let [hand_a, _, eq_a, _, log_a, _, chat_a] = Layout::vertical([
+            Constraint::Length(hand_h),
+            Constraint::Length(gap),
+            Constraint::Length(eq_h),
+            Constraint::Length(gap),
+            Constraint::Length(log_h),
+            Constraint::Length(gap),
+            Constraint::Length(chat_h),
+        ])
+        .areas(inner);
+        render_panel_hand(frame, hand_a, state);
+        render_panel_equity(frame, eq_a, state);
+        render_panel_log(frame, log_a, state);
+        render_panel_chat(frame, chat_a, state);
+    } else {
+        let [hand_a, _, log_a, _, chat_a] = Layout::vertical([
+            Constraint::Length(hand_h),
+            Constraint::Length(gap),
+            Constraint::Length(log_h),
+            Constraint::Length(gap),
+            Constraint::Length(chat_h),
+        ])
+        .areas(inner);
+        render_panel_hand(frame, hand_a, state);
+        render_panel_log(frame, log_a, state);
+        render_panel_chat(frame, chat_a, state);
+    }
 }
 
 // ---------------------------------------------------------------- pod --------
@@ -508,7 +524,7 @@ fn render_key_hints(frame: &mut Frame, area: Rect) {
         ("A", "all-in"),
         ("↑↓", "bet size"),
         ("⏎", "confirm"),
-        ("Tab", "next seat"),
+        ("S", "settings"),
         ("Q", "quit"),
     ];
     let mut spans: Vec<Span> = Vec::new();
@@ -1073,6 +1089,29 @@ mod tests {
         assert!(
             frame.contains("◉ 600"),
             "an opponent's street bet should be shown below their stack"
+        );
+    }
+
+    #[test]
+    fn rail_hides_equity_panel_when_win_rate_is_off() {
+        let mut state = GameState::demo();
+        state.show_win_rate = false;
+        let frame = dump_state(&state, 120, 40);
+        assert!(
+            !frame.contains("EQUITY"),
+            "the EQUITY · POT ODDS panel is omitted when win-rate is off"
+        );
+        // The action log is still present and reclaims the freed rows.
+        assert!(frame.contains("ACTION LOG"), "log panel still shown");
+    }
+
+    #[test]
+    fn rail_shows_equity_panel_when_win_rate_is_on() {
+        // GameState::demo() defaults show_win_rate to true.
+        let frame = dump(120, 40);
+        assert!(
+            frame.contains("EQUITY"),
+            "equity panel shown when win-rate is on"
         );
     }
 

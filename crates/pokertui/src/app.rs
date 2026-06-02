@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crossterm::event::KeyCode;
 use poker_core::Card;
@@ -7,7 +7,9 @@ use poker_core::bot::{BotProfile, OpponentModel, decide};
 use poker_core::equity::hero_equity;
 use poker_core::holdem::{Action, HandConfig, HandState, Phase, PlayerId, apply, legal_actions};
 
-use crate::adapter::{NameRegistry, to_presentation};
+use crate::adapter::{NameRegistry, hero_index, to_presentation};
+use crate::menu::{MenuOutcome, SettingsMenu};
+use crate::settings::Settings;
 use crate::state::GameState;
 
 /// Monte Carlo trials per equity estimate. ~10k gives ±~1% accuracy and runs
@@ -51,10 +53,6 @@ impl Controller {
     }
 }
 
-/// Visible delay before a bot acts, so a human can follow the table at a natural
-/// pace rather than seeing the bots blink through their turns.
-const BOT_ACTION_DELAY: Duration = Duration::from_millis(700);
-
 /// The hero seat the UI renders cards for: the first human-controlled seat. An
 /// all-bot table (allowed, e.g. a demo that just watches the bots play) has no
 /// human, so it falls back to seat 0 as the spectator viewpoint.
@@ -83,8 +81,12 @@ pub struct App {
     /// Whether the current hand's log has already been recorded into `model`,
     /// so a completed hand is folded in exactly once. Reset when a hand is dealt.
     hand_recorded: bool,
-    /// How long a bot waits before acting, so a human can follow the table.
-    bot_delay: Duration,
+    /// Player settings. Bot delay and win-rate display apply live; seat count
+    /// and blinds apply when the next game is built.
+    settings: Settings,
+    /// The settings overlay when open, `None` while playing the table. While
+    /// `Some`, key input is routed here and `step` is a no-op.
+    menu: Option<SettingsMenu>,
     /// Earliest instant the bot whose turn it is may act. Armed when a bot turn
     /// is first seen and cleared once it acts (or the turn passes to a human).
     next_bot_action: Option<Instant>,
@@ -99,46 +101,84 @@ pub struct App {
 }
 
 impl App {
+    /// Build the app from the player's settings: a fresh game with the chosen
+    /// seat count and blinds, the menu closed.
+    pub fn new(settings: Settings) -> Self {
+        let mut app = Self {
+            engine: None,
+            names: NameRegistry::demo(settings.seats),
+            seats: Vec::new(),
+            model: OpponentModel::new(settings.seats),
+            hand_recorded: false,
+            settings,
+            menu: None,
+            next_bot_action: None,
+            raise_to: None,
+            game_over: false,
+            equity: None,
+        };
+        app.start_fresh_game();
+        app
+    }
+
+    /// The default demo table (six seats, 50/100 blinds). Used by the test
+    /// suite; the binary builds its first game from loaded settings.
+    #[cfg(test)]
     pub fn new_demo_hand() -> Self {
+        Self::new(Settings::default())
+    }
+
+    /// Build a fresh game from the current settings: a new deal with reset
+    /// 10,000 stacks, regenerated seats, names, and opponent model. Used at
+    /// startup and when seats/blinds change between games.
+    fn start_fresh_game(&mut self) {
+        let s = &self.settings;
         let cfg = HandConfig {
-            num_players: 6,
-            small_blind: 50,
-            big_blind: 100,
+            num_players: s.seats,
+            small_blind: s.small_blind,
+            big_blind: s.big_blind,
             dealer: PlayerId(0),
             // Seed from the wall clock so each launch deals a different hand.
             seed: Self::fresh_seed(),
         };
-        let engine = HandState::new_hand(cfg, vec![10_000; 6]);
-        let seats = Self::demo_seats();
-        let mut names = NameRegistry::demo_six();
+        let engine = HandState::new_hand(cfg, vec![10_000; s.seats]);
+        let seats = Self::build_seats(s.seats);
+        let mut names = NameRegistry::demo(s.seats);
         // Keep the rendered hero consistent with the controller layout.
         names.hero = hero_seat(&seats);
-        let model = OpponentModel::new(seats.len());
-        Self {
-            engine: Some(engine),
-            names,
-            model,
-            hand_recorded: false,
-            bot_delay: BOT_ACTION_DELAY,
-            next_bot_action: None,
-            seats,
-            raise_to: None,
-            game_over: false,
-            equity: None,
-        }
+        self.model = OpponentModel::new(seats.len());
+        self.engine = Some(engine);
+        self.seats = seats;
+        self.names = names;
+        self.raise_to = None;
+        self.hand_recorded = false;
+        self.game_over = false;
+        self.equity = None;
     }
 
-    /// The demo table: the human sits at seat 3 ("you"), surrounded by a spread
-    /// of bot personalities.
-    fn demo_seats() -> Vec<Controller> {
-        vec![
-            Controller::Bot(BotProfile::tag()),
-            Controller::Bot(BotProfile::calling_station()),
-            Controller::Bot(BotProfile::balanced()),
-            Controller::Human,
-            Controller::Bot(BotProfile::rock()),
-            Controller::Bot(BotProfile::tag()),
-        ]
+    /// Seat controllers for an `n`-handed table: one human at the hero seat,
+    /// the rest bots cycling through the bundled profile spread.
+    fn build_seats(n: usize) -> Vec<Controller> {
+        let hero = hero_index(n);
+        let mut bots = BotProfile::ALL.iter().cycle();
+        (0..n)
+            .map(|i| {
+                if i == hero {
+                    Controller::Human
+                } else {
+                    Controller::Bot(*bots.next().expect("ALL cycles forever"))
+                }
+            })
+            .collect()
+    }
+
+    /// Whether the running game's shape (seat count, blinds) differs from the
+    /// current settings, i.e. a seats/blinds change is pending a fresh game.
+    fn config_changed(&self) -> bool {
+        let cfg = &self.engine().config;
+        self.seats.len() != self.settings.seats
+            || cfg.small_blind != self.settings.small_blind
+            || cfg.big_blind != self.settings.big_blind
     }
 
     /// A fresh seed off the wall clock so each hand deals differently.
@@ -177,7 +217,38 @@ impl App {
             .map(|(min, max)| self.raise_to.unwrap_or(min).clamp(min, max));
         gs.phase.equity = equity;
         gs.notice = self.notice();
+        gs.show_win_rate = self.settings.show_win_rate;
         gs
+    }
+
+    /// Open the settings menu with a working copy of the current settings.
+    pub fn open_menu(&mut self) {
+        self.menu = Some(SettingsMenu::from(self.settings.clone()));
+    }
+
+    /// Whether the settings overlay is currently open.
+    pub fn is_menu_open(&self) -> bool {
+        self.menu.is_some()
+    }
+
+    /// The open settings menu, for rendering. Panics if the menu is closed —
+    /// call only when `is_menu_open` is true.
+    pub fn menu(&self) -> &SettingsMenu {
+        self.menu.as_ref().expect("menu is open")
+    }
+
+    /// Route a key to the open settings menu. On close, commit the draft into
+    /// the live settings, persist it, and clear the menu. A no-op if the menu
+    /// is not open.
+    pub fn handle_menu_key(&mut self, key: KeyCode) {
+        let Some(menu) = self.menu.as_mut() else {
+            return;
+        };
+        if menu.handle_key(key) == MenuOutcome::Close {
+            self.settings = menu.draft().clone();
+            self.settings.save();
+            self.menu = None;
+        }
     }
 
     /// The hero's cached win-chance percentage for the current state, refreshing
@@ -260,10 +331,16 @@ impl App {
                 self.game_over = true;
                 return false;
             }
-            let next = self.engine().next_hand(Self::fresh_seed());
-            self.engine = Some(next);
-            self.raise_to = None;
-            self.hand_recorded = false;
+            // A seat-count or blind change only takes effect at a hand boundary:
+            // on continue, rebuild a fresh game; otherwise carry stacks forward.
+            if self.config_changed() {
+                self.start_fresh_game();
+            } else {
+                let next = self.engine().next_hand(Self::fresh_seed());
+                self.engine = Some(next);
+                self.raise_to = None;
+                self.hand_recorded = false;
+            }
             return true;
         }
         let Some(to_act) = self.engine().to_act else {
@@ -346,6 +423,12 @@ impl App {
 
     /// `step` with an injectable clock, so pacing is testable without waiting.
     fn step_at(&mut self, now: Instant) -> bool {
+        // The menu pauses the table: no bot acts, and the pacing timer is
+        // cleared so it re-arms cleanly once play resumes.
+        if self.menu.is_some() {
+            self.next_bot_action = None;
+            return false;
+        }
         let (to_act, complete) = {
             let e = self.engine();
             (e.to_act, e.phase == Phase::Complete)
@@ -364,7 +447,7 @@ impl App {
         // then act once the delay has elapsed. At most one action per call.
         match self.next_bot_action {
             None => {
-                self.next_bot_action = Some(now + self.bot_delay);
+                self.next_bot_action = Some(now + self.settings.bot_delay);
                 false
             }
             Some(at) if now >= at => {
@@ -425,6 +508,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn hero_is_the_first_human_seat() {
@@ -610,6 +694,7 @@ mod tests {
         let bot = app.engine().to_act.unwrap();
         assert!(app.seats[bot.0].is_bot());
         let log_before = app.engine().log.len();
+        let delay = app.settings.bot_delay;
 
         let t0 = Instant::now();
         // First sighting only arms the pacing timer.
@@ -620,10 +705,10 @@ mod tests {
             "bot waits out the delay"
         );
         // Still inside the delay window.
-        assert!(!app.step_at(t0 + Duration::from_millis(100)));
+        assert!(!app.step_at(t0 + delay / 2));
         assert_eq!(app.engine().log.len(), log_before);
         // Past the delay: the bot acts.
-        assert!(app.step_at(t0 + BOT_ACTION_DELAY + Duration::from_millis(1)));
+        assert!(app.step_at(t0 + delay + Duration::from_millis(1)));
         assert!(
             app.engine().log.len() > log_before,
             "the bot acted once the delay elapsed"
@@ -790,6 +875,134 @@ mod tests {
         assert!(
             notice.contains("you"),
             "names the surviving player (hero idx 3)"
+        );
+    }
+
+    #[test]
+    fn menu_open_pauses_the_step_loop() {
+        let mut app = App::new_demo_hand();
+        app.handle_key(KeyCode::Char('f')); // human folds → a bot is to act
+        let bot = app.engine().to_act.unwrap();
+        assert!(app.seats[bot.0].is_bot());
+        let log_before = app.engine().log.len();
+
+        app.open_menu();
+        let t0 = Instant::now();
+        // Even well past any delay, no bot acts while the menu is open.
+        assert!(!app.step_at(t0));
+        assert!(!app.step_at(t0 + Duration::from_secs(10)));
+        assert_eq!(
+            app.engine().log.len(),
+            log_before,
+            "no bot acts while the menu is open"
+        );
+        assert!(
+            app.next_bot_action.is_none(),
+            "the pacing timer stays disarmed"
+        );
+    }
+
+    #[test]
+    fn win_rate_toggle_shows_in_view_immediately() {
+        let mut app = App::new_demo_hand();
+        assert!(app.view().show_win_rate, "on by default");
+
+        app.open_menu();
+        // Row 1 is the win-rate toggle: Down to it, Right turns it off, Esc commits.
+        app.handle_menu_key(KeyCode::Down);
+        app.handle_menu_key(KeyCode::Right);
+        app.handle_menu_key(KeyCode::Esc);
+
+        assert!(!app.is_menu_open(), "Esc closes the menu");
+        assert!(
+            !app.view().show_win_rate,
+            "the live view reflects the toggle right away"
+        );
+    }
+
+    #[test]
+    fn bot_delay_change_is_read_live_by_pacing() {
+        let mut app = App::new_demo_hand();
+        // Walk the bot delay down to 0ms via the menu (row 0: 500 → 250 → 0).
+        app.open_menu();
+        app.handle_menu_key(KeyCode::Left);
+        app.handle_menu_key(KeyCode::Left);
+        app.handle_menu_key(KeyCode::Esc);
+        assert_eq!(app.settings.bot_delay, Duration::from_millis(0));
+
+        app.handle_key(KeyCode::Char('f')); // human folds → a bot is to act
+        let bot = app.engine().to_act.unwrap();
+        assert!(app.seats[bot.0].is_bot());
+        let log_before = app.engine().log.len();
+
+        // With a zero delay the bot acts on the very next step at the same instant.
+        let t0 = Instant::now();
+        assert!(!app.step_at(t0), "first step only arms the (zero) timer");
+        assert!(app.step_at(t0), "a zero delay lets the bot act immediately");
+        assert!(app.engine().log.len() > log_before);
+    }
+
+    #[test]
+    fn changing_seats_and_blinds_rebuilds_a_fresh_game_on_continue() {
+        let mut app = App::new_demo_hand(); // 6 seats, 50/100
+        app.open_menu();
+        // Row 2 (seats): Down·Down to focus, three Lefts walk 6 → 5 → 4 → 3.
+        app.handle_menu_key(KeyCode::Down);
+        app.handle_menu_key(KeyCode::Down);
+        app.handle_menu_key(KeyCode::Left);
+        app.handle_menu_key(KeyCode::Left);
+        app.handle_menu_key(KeyCode::Left);
+        // Row 3 (blinds): Down to focus, Right walks 50/100 → 100/200.
+        app.handle_menu_key(KeyCode::Down);
+        app.handle_menu_key(KeyCode::Right);
+        app.handle_menu_key(KeyCode::Esc);
+        assert_eq!(app.settings.seats, 3);
+        assert_eq!(
+            (app.settings.small_blind, app.settings.big_blind),
+            (100, 200)
+        );
+        // The running game is untouched until the hand boundary.
+        assert_eq!(
+            app.engine().config.num_players,
+            6,
+            "live game unchanged mid-hand"
+        );
+
+        // Finish the hand, then continue.
+        fold_to_completion(&mut app);
+        assert!(
+            app.handle_key(KeyCode::Char(' ')),
+            "continue deals the next game"
+        );
+
+        // A fresh game: new seat count, new blinds, reset 10,000 stacks.
+        assert_eq!(app.engine().config.num_players, 3, "rebuilt seat count");
+        assert_eq!(app.seats.len(), 3, "controllers rebuilt to match");
+        assert_eq!(app.engine().config.small_blind, 100);
+        assert_eq!(app.engine().config.big_blind, 200);
+        let chips: u64 =
+            app.engine().stacks.iter().sum::<u64>() + app.engine().contributed.iter().sum::<u64>();
+        assert_eq!(chips, 30_000, "three fresh 10,000 stacks");
+    }
+
+    #[test]
+    fn unchanged_config_carries_stacks_instead_of_rebuilding() {
+        let mut app = App::new_demo_hand();
+        // Open and close the menu without changing anything.
+        app.open_menu();
+        app.handle_menu_key(KeyCode::Esc);
+        assert!(!app.config_changed(), "nothing changed");
+
+        fold_to_completion(&mut app);
+        let busted_total: u64 = app.engine().stacks.iter().sum();
+        assert!(app.handle_key(KeyCode::Char(' ')));
+        // Same six-handed table; chips carried via next_hand, not reset to 60k.
+        assert_eq!(app.engine().config.num_players, 6);
+        let carried: u64 =
+            app.engine().stacks.iter().sum::<u64>() + app.engine().contributed.iter().sum::<u64>();
+        assert_eq!(
+            carried, busted_total,
+            "stacks carried, not reset to fresh 10,000s"
         );
     }
 
