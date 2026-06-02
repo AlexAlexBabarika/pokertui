@@ -7,6 +7,9 @@ table over the network.
 The interface is a TUI built with [ratatui](https://ratatui.rs), complete with
 rendered cards, an action bar, and an optional live equity / pot-odds rail.
 
+# Download 
+
+
 ## Workspace layout
 
 The project is a Cargo workspace of four crates:
