@@ -45,7 +45,7 @@ impl NameRegistry {
 }
 
 /// Position labels for a standard 6-handed table, indexed by offset from the dealer.
-fn position_label(offset: usize, n: usize) -> String {
+pub(crate) fn position_label(offset: usize, n: usize) -> String {
     if n == 2 {
         return if offset == 0 {
             "BTN".into()
@@ -189,7 +189,7 @@ pub fn to_presentation(engine: &HandState, names: &NameRegistry) -> GameState {
     }
 }
 
-fn phase_label(p: EnginePhase) -> String {
+pub(crate) fn phase_label(p: EnginePhase) -> String {
     match p {
         EnginePhase::Preflop => "PREFLOP".into(),
         EnginePhase::Flop => "FLOP".into(),
@@ -206,7 +206,7 @@ fn to_call_for_hero(engine: &HandState, hero: PlayerId) -> u64 {
 
 /// Pot odds as a percentage: the share of the *final* pot the hero must put in
 /// to call. `to_call / (pot + to_call) * 100`. Zero when there is no bet to face.
-fn pot_odds_pct(to_call: u64, pot: u64) -> f32 {
+pub(crate) fn pot_odds_pct(to_call: u64, pot: u64) -> f32 {
     if to_call == 0 {
         return 0.0;
     }
