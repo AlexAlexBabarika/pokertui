@@ -1,4 +1,4 @@
-# pokertui
+# Pokertui 🃏
 
 A terminal Texas Hold'em game written in Rust. Play heads-up or full-ring
 against bots in a single binary, or connect to a headless server and play a
@@ -7,9 +7,18 @@ table over the network.
 The interface is a TUI built with [ratatui](https://ratatui.rs), complete with
 rendered cards, an action bar, and an optional live equity / pot-odds rail.
 
-# Download 
+# Download It! 🔌
+## Linux/MacOS
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AlexAlexBabarika/pokertui/releases/download/v0.1.0/pokertui-installer.sh | sh
+```
 
+## Microslop Windows
+```sh
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/AlexAlexBabarika/pokertui/releases/download/v0.1.0/pokertui-installer.ps1 | iex"
+```
 
+# Description 📕
 ## Workspace layout
 
 The project is a Cargo workspace of four crates:
